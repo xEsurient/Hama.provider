@@ -224,6 +224,7 @@ The settings live here, not in Plex: PMS 1.43 asks providers for preferences but
 | `season_poster_sources` | `AniList, AniDB, TheTVDB, FanartTV` | Season posters (TVDB seasons). AniList/AniDB = the cover of the AniDB entry that starts that season. |
 | `fanart_api_key`, `tmdb_api_key`, `tvdb_api_key` | HAMA's shared keys | Your own keys avoid shared rate limits. fanart.tv: a free *personal* key is enough. |
 | `anidb_client`, `anidb_clientver` | `hama`, `1` | AniDB HTTP client name/version; HAMA's by default (see *AniDB rules* below). |
+| `anidb_titles_source` | `mirror` | AniDB title list: `mirror` = the Anime-Lists GitHub copy, falling back to AniDB itself when the mirror is down or a search finds nothing (max once a day, never during a ban); `anidb` = AniDB only (max once a day). |
 | `rescue_unmatched` | `true` | With `plex_url`: re-match items Plex left unmatched (checked 2 min after start, then every 6 h). |
 | `experimental_markers` | `false` | Research only: advertise a "markers" feature and log what Plex asks (see *Current limits*). |
 | `genres_add_weights`, `genre_minimum_weight` | `false`, `400` | Same as HAMA's AniDB genre options. |
@@ -244,7 +245,15 @@ Put an `anime-list-custom.xml` in the data folder to override Anime-Lists entrie
   `anidb_client` / `anidb_clientver`.
 - **Request rate.** AniDB bans IPs that request more than one page every 2 seconds, or the same anime repeatedly on one day.
   Requests made during a ban extend it. The provider waits 4 s between AniDB requests and caches each anime for 6 days, or up to a year
-  for shows that ended long ago. After a ban it uses only the cache for 3 hours.
+  for shows that ended long ago. The title list comes from a GitHub mirror, so restarts and new data folders don't re-download it from AniDB.
+  The mirror can lag behind brand-new anime: when a title isn't found, the list is fetched once from AniDB itself (at most once a day,
+  never during a ban; logged on `/report`). A folder tag `[anidb-12345]` always works, whatever the list contains.
+- **If you get banned** (status page: *AniDB API: banned*):
+  - The provider uses only its cache until the shown time. That's 3 h for the first ban, doubling on each further ban up to 24 h, and it
+    is remembered across restarts.
+  - Don't restart or re-create the container to "fix" it.
+  - Check `/report` for the ban event and for *legacy HAMA* events: libraries still on the old agent query AniDB from the same IP.
+  - Also check other AniDB tools on your network, and that the data folder is writable, so the cache persists.
 - **Scan speed.** One Plex request fetches at most 3 uncached AniDB entries; the background pre-fetch does the rest at one entry per
   `anidb_prefetch_seconds`. The first scan of a large library is therefore slow (about an hour per 1,000 AniDB entries). Let it finish.
 

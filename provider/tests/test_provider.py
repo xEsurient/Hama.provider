@@ -373,6 +373,68 @@ class PrepareTests(unittest.TestCase):
             self.assertTrue(os.path.exists(os.path.join(root, "Show", "Show - NCOP1.mkv")))    # nothing changed
 
 
+class AniDBBanTests(unittest.TestCase):
+    def test_ban_persists_and_escalates(self):
+        from hama_provider.anidb import AniDB, BAN_BACKOFF
+        with tempfile.TemporaryDirectory() as tmp:
+            state = os.path.join(tmp, "anidb_state.json")
+            a = AniDB(None, "hama", "1", state)
+            self.assertFalse(a._validate(b'<error code="500">banned</error>'))
+            first = a.banned_until - time.time()
+            self.assertAlmostEqual(first, BAN_BACKOFF, delta=5)
+            b = AniDB(None, "hama", "1", state)                              # restart: still banned
+            self.assertGreater(b.banned_until, time.time() + BAN_BACKOFF - 10)
+            b._validate(b'<error code="500">banned</error>')                  # second ban: twice as long
+            self.assertAlmostEqual(b.banned_until - time.time(), 2 * BAN_BACKOFF, delta=5)
+            self.assertTrue(b._validate(b'<anime id="1"><type>TV</type></anime>'))
+            self.assertEqual(AniDB(None, "hama", "1", state).ban_strikes, 0)    # good answer resets the escalation
+
+    def test_title_source_and_fallback(self):
+        from hama_provider.anidb import TITLES_MIRROR_URL, TITLES_URL, TitleDB
+        from hama_provider.net import Fetcher
+        names = {"1": "Kumo no Mukou", "2": "Hoshi no Koe"}
+        dump = lambda *aids: ("<animetitles>" + "".join('<anime aid="%s"><title type="main" xml:lang="x-jat">%s</title></anime>'
+                                                         % (a, names[a]) for a in aids) + "</animetitles>").encode()
+        with tempfile.TemporaryDirectory() as tmp:
+            calls = []
+            responses = {TITLES_MIRROR_URL: dump("1"), TITLES_URL: dump("1", "2")}
+
+            class F(Fetcher):
+                def get(self, url, cache_name, ttl, **kw):
+                    calls.append(url)
+                    data = responses.get(url)
+                    if data:
+                        self.write_cache(cache_name, data)
+                    return data
+
+            db = TitleDB(F(tmp))
+            db.load()
+            self.assertEqual((calls, len(db.titles)), ([TITLES_MIRROR_URL], 1))           # mirror only, no AniDB load
+            self.assertEqual(db.search("Hoshi no Koe"), [])
+            self.assertTrue(db.refresh_from_anidb("test"))                                # missing anime -> AniDB once
+            self.assertEqual(db.search("Hoshi no Koe")[0][1], "2")
+            self.assertFalse(db.refresh_from_anidb("again"))                              # max once a day
+            self.assertEqual(calls.count(TITLES_URL), 1)
+            db2 = TitleDB(F(tmp))
+            db2.load()                                                                    # restart: keeps the larger list
+            self.assertEqual(len(db2.titles), 2)
+            self.assertEqual(calls.count(TITLES_URL), 1)
+        with tempfile.TemporaryDirectory() as tmp:
+            calls = []
+            responses = {TITLES_URL: dump("1")}                                           # mirror down -> AniDB fallback
+            db = TitleDB(F(tmp))
+            db.load()
+            self.assertEqual(calls, [TITLES_MIRROR_URL, TITLES_URL])
+        with tempfile.TemporaryDirectory() as tmp:
+            calls = []
+            responses = {}                                                                # banned: no direct download
+            db = TitleDB(F(tmp))
+            db.direct_allowed = lambda: False
+            with self.assertRaises(RuntimeError):
+                db.load()
+            self.assertEqual(calls, [TITLES_MIRROR_URL])
+
+
 class TvdbMapTests(unittest.TestCase):
     def test_defaults_offsets_and_explicit(self):
         eps = {(1, e): {} for e in range(1, 4)}

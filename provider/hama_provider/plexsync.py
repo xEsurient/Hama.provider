@@ -150,6 +150,10 @@ class PlexSync:
         known = schemes(self.service)
         asked = 0
         for section in self._get("/library/sections").get("Directory", []):
+            if section.get("agent") == "com.plexapp.agents.hama":
+                self.service.events.add("legacy HAMA", "Library '%s' still uses the legacy HAMA agent. It queries AniDB from this IP "
+                                        "too, which adds to the AniDB rate limit; switch it to a HAMA provider agent (see MIGRATING.md)"
+                                        % section.get("title"))
             found = known.get(section.get("agent", ""))
             if not found:
                 continue

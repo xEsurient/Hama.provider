@@ -114,8 +114,8 @@ class Service:
         self.base_cfg = cfg
         self.profiles = load_profiles(cfg)
         self.fetcher = Fetcher(os.path.join(cfg.data_dir, "cache"))
-        self.titledb = TitleDB(self.fetcher)
-        self.anidb = AniDB(self.fetcher, cfg.anidb_client, cfg.anidb_clientver)
+        self.titledb = TitleDB(self.fetcher, cfg.anidb_titles_source)
+        self.anidb = AniDB(self.fetcher, cfg.anidb_client, cfg.anidb_clientver, os.path.join(cfg.data_dir, "anidb_state.json"))
         self.lists = AnimeLists(self.fetcher, cfg.data_dir)
         self.art = Artwork(self.fetcher, cfg.fanart_api_key)
         self.tmdb = TheMovieDb(self.fetcher, cfg.tmdb_api_key)
@@ -125,7 +125,14 @@ class Service:
         self.issues = Issues(cfg.data_dir)
         self.events = Events(cfg.data_dir)
         self.fetcher.on_host_down = lambda host, exc: self.events.add("source down", "%s unreachable (%s); cache used for 10 min" % (host, exc))
-        self.anidb.on_ban = lambda: self.events.add("AniDB ban", "AniDB refused requests (ban); cache only for 3 hours. Check the AniDB client name and request rate.")
+        self.titledb.direct_allowed = lambda: time.time() >= self.anidb.banned_until
+        self.titledb.on_direct = lambda reason, added: self.events.add(
+            "titles from AniDB", "AniDB title list fetched directly (%s): %d anime the GitHub mirror didn't have yet" % (reason, added))
+        self.anidb.on_ban = lambda: self.events.add(
+            "AniDB ban", "AniDB refused requests from this IP (ban #%d); cache only until %s. Usual causes: another AniDB tool or the "
+            "legacy HAMA agent querying from the same IP, or restarting/re-creating the provider with a fresh data folder. "
+            "Don't restart it during the ban: requests made while banned extend it."
+            % (self.anidb.ban_strikes, time.strftime("%Y-%m-%d %H:%M", time.localtime(self.anidb.banned_until))))
         self._report_lock = threading.Lock()
         self._request = threading.local()
         self.prefetch = Prefetcher(self, cfg.anidb_prefetch_seconds)
@@ -311,8 +318,12 @@ class Service:
         if not self.wait_ready():
             raise RuntimeError("AniDB title database not loaded yet")
         query = FORCED_ID_RE.sub("", title).strip()
+        found = self.titledb.search(query, limit=10 if manual else 5)
+        if query and (not found or found[0][0] < self.cfg.match_min_score) \
+                and self.titledb.refresh_from_anidb("no match for '%s' in the mirror" % query[:60]):
+            found = self.titledb.search(query, limit=10 if manual else 5)  # the mirror may lag behind new anime
         results, seen = [], set()
-        for score, aid, _ in self.titledb.search(query, limit=10 if manual else 5):
+        for score, aid, _ in found:
             if not manual and score < self.cfg.match_min_score:
                 continue
             root = self._root_for_aid(aid, mode)

@@ -21,6 +21,7 @@ DEFAULTS = {
     # API keys / clients (upstream HAMA shared defaults)
     "anidb_client": "hama",
     "anidb_clientver": "1",
+    "anidb_titles_source": "mirror",        # AniDB title list: GitHub mirror, falling back to AniDB (max once a day); "anidb" = direct only
     "fanart_api_key": "cfa9dc054d221b8d107f8411cd20b13f",
     "tmdb_api_key": "7f4a0bd0bd3315bb832e17feda70b5cd",
     "tvdb_api_key": "A27AD9BE0DA63333",

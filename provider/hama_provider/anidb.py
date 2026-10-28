@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import datetime
+import json
+import os
 import difflib
 import logging
 import string
@@ -15,6 +17,8 @@ from .titles import cleanse_title, summary_sanitizer
 log = logging.getLogger("hama.anidb")
 
 TITLES_URL = "https://anidb.net/api/anime-titles.xml.gz"
+# The same dump, mirrored by the Anime-Lists project on GitHub: no load on AniDB (which allows the dump once a day per IP)
+TITLES_MIRROR_URL = "https://raw.githubusercontent.com/Anime-Lists/anime-lists/master/animetitles.xml"
 HTTP_API_URL = "http://api.anidb.net:9001/httpapi?request=anime&client={client}&clientver={clientver}&protover=1&aid={aid}"
 PIC_URL = "https://cdn.anidb.net/images/main/{}"
 LANG_ATTR = "{http://www.w3.org/XML/1998/namespace}lang"
@@ -29,21 +33,36 @@ FILTER_SEARCH_WORDS = {
 # AniDB special episode prefixes -> HAMA season 0 numbering offset
 SPECIAL_OFFSETS = {"S": 0, "C": 100, "T": 200, "P": 300, "O": 400}
 RESTRICTED_GENRE = {"18 restricted": "X", "pornography": "X", "tv censoring": "TV-MA", "borderline porn": "TV-MA"}
-BAN_BACKOFF = 3 * 3600
+BAN_BACKOFF = 3 * 3600        # first ban: cache only for 3 h; doubles on each further ban (max 24 h), reset by a good answer
+BAN_BACKOFF_MAX = 24 * 3600
+
+
+DIRECT_CACHE, MIRROR_CACHE = "AniDB/anime-titles.xml", "AniDB/anime-titles-mirror.xml"
+DIRECT_ATTEMPT = "AniDB/anime-titles-direct.attempt"   # mtime = last direct download attempt (max 1 per DIRECT_MIN_AGE)
+DIRECT_MIN_AGE = DAY
 
 
 class TitleDB:
-    def __init__(self, fetcher: Fetcher):
+    """AniDB title list. Default: the Anime-Lists GitHub mirror (no AniDB load). Falls back to AniDB's own dump when the mirror
+    is unreachable, or when a search finds nothing (the mirror can lag behind new anime): at most once a day, never during a ban.
+    Whichever list (mirror or direct) has more anime is used."""
+
+    def __init__(self, fetcher: Fetcher, source: str = "mirror"):
         self.fetcher = fetcher
+        self.source = source  # "mirror" (default, with AniDB fallback) or "anidb" (direct only)
         self.titles: dict[str, list[tuple[str, str, str]]] = {}   # aid -> [(type, lang, text)]
         self.index: list[tuple[str, str, str]] = []              # (cleansed, aid, text)
         self.ready = threading.Event()
+        self.direct_allowed = lambda: True  # set by the service: False while AniDB bans us
+        self.on_direct = None               # callback(reason, count) for the /report events
+        self._lock = threading.Lock()
 
-    def load(self):
-        data = self.fetcher.get(TITLES_URL, "AniDB/anime-titles.xml", ttl=2 * DAY,
-                                validate=lambda d: b"<animetitles" in d[:500])
-        if not data:
-            raise RuntimeError("AniDB title database unavailable (no download and no cache)")
+    @staticmethod
+    def _valid(data: bytes) -> bool:
+        return b"<animetitles" in data[:500]
+
+    @staticmethod
+    def _parse(data: bytes):
         titles, index = {}, []
         for anime in ET.fromstring(data).iter("anime"):
             aid = anime.get("aid")
@@ -51,9 +70,72 @@ class TitleDB:
             titles[aid] = entries
             for _type, _lang, text in entries:
                 index.append((cleanse_title(text), aid, text))
-        self.titles, self.index = titles, index
+        return titles, index
+
+    def load(self):
+        candidates = []
+        if self.source != "anidb":
+            mirror = self.fetcher.get(TITLES_MIRROR_URL, MIRROR_CACHE, ttl=DAY, validate=self._valid)
+            if mirror:
+                candidates.append(("mirror", mirror))
+        direct = self.fetcher.read_cache(DIRECT_CACHE)  # an earlier direct download (fallback or source=anidb)
+        if self.source == "anidb" or not candidates:
+            fresh = self._fetch_direct("mirror unavailable" if self.source != "anidb" else "")
+            direct = fresh or direct
+        if direct and self._valid(direct):
+            candidates.append(("AniDB", direct))
+        if not candidates:
+            raise RuntimeError("AniDB title database unavailable (no mirror, no AniDB download, no cache)")
+        best = None
+        for name, data in candidates:
+            try:
+                parsed = self._parse(data)
+            except ET.ParseError as exc:
+                log.warning("AniDB title list from %s unreadable: %s", name, exc)
+                continue
+            if best is None or len(parsed[0]) > len(best[1][0]):
+                best = (name, parsed)
+        if best is None:
+            raise RuntimeError("AniDB title database unreadable")
+        with self._lock:
+            self.titles, self.index = best[1]
         self.ready.set()
-        log.info("AniDB titles loaded: %d anime, %d titles", len(titles), len(index))
+        log.info("AniDB titles loaded from %s: %d anime, %d titles", best[0], len(self.titles), len(self.index))
+
+    def _fetch_direct(self, reason: str) -> bytes | None:
+        """AniDB's own dump, at most once per DIRECT_MIN_AGE (counted across restarts) and never during a ban."""
+        attempt = self.fetcher.read_cache(DIRECT_ATTEMPT, DIRECT_MIN_AGE)
+        if attempt is not None or not self.direct_allowed():
+            return None
+        try:
+            self.fetcher.write_cache(DIRECT_ATTEMPT, str(int(time.time())).encode())
+        except OSError:
+            return None  # can't record the attempt: don't risk repeated downloads
+        data = self.fetcher.get(TITLES_URL, DIRECT_CACHE, ttl=0, validate=self._valid)
+        if data and reason:
+            log.info("AniDB title list downloaded directly (%s)", reason)
+        return data
+
+    def refresh_from_anidb(self, reason: str) -> bool:
+        """Search found nothing: maybe the mirror lacks a new anime. Try AniDB's own dump (guarded); True if more anime now."""
+        if self.source == "anidb":
+            return False
+        data = self._fetch_direct(reason)
+        if not data:
+            return False
+        try:
+            titles, index = self._parse(data)
+        except ET.ParseError:
+            return False
+        with self._lock:
+            if len(titles) <= len(self.titles):
+                return False
+            added = len(titles) - len(self.titles)
+            self.titles, self.index = titles, index
+        log.info("AniDB title list refreshed from AniDB: %d more anime than the mirror", added)
+        if self.on_direct:
+            self.on_direct(reason, added)
+        return True
 
     def search(self, query: str, limit: int = 10) -> list[tuple[int, str, str]]:
         """Return [(score, aid, matched title)] best first. Port of HAMA AniDB.Search scoring."""
@@ -95,10 +177,13 @@ def similarity(query: str, title: str) -> float:
 
 
 class AniDB:
-    def __init__(self, fetcher: Fetcher, client: str, clientver: str):
+    def __init__(self, fetcher: Fetcher, client: str, clientver: str, state_path: str = ""):
         self.fetcher = fetcher
         self.client, self.clientver = client, clientver
         self.banned_until = 0.0
+        self.ban_strikes = 0
+        self.state_path = state_path  # ban state survives restarts: requests during a ban extend it
+        self._load_state()
         self.on_ban = None  # callback(), e.g. the /report events
         self._memo: dict[str, tuple[float, dict]] = {}
         self._memo_lock = threading.Lock()
@@ -142,14 +227,44 @@ class AniDB:
         head = data[:300].decode("utf-8", "replace")
         if "<error" in head:
             if "banned" in head.lower():
-                self.banned_until = time.time() + BAN_BACKOFF
-                log.error("AniDB API ban hit, using cache only for %d hours", BAN_BACKOFF // 3600)
+                self.ban_strikes += 1
+                backoff = min(BAN_BACKOFF * 2 ** (self.ban_strikes - 1), BAN_BACKOFF_MAX)
+                self.banned_until = time.time() + backoff
+                self._save_state()
+                log.error("AniDB API ban hit (#%d), using cache only for %d hours", self.ban_strikes, backoff // 3600)
                 if self.on_ban:
                     self.on_ban()
             else:
                 log.warning("AniDB API error: %s", head.strip())
             return False
+        if "<anime" in head and self.ban_strikes:
+            self.ban_strikes = 0  # a good answer again: next ban starts at the short back-off
+            self._save_state()
         return "<anime" in head
+
+    def _load_state(self):
+        if not self.state_path:
+            return
+        try:
+            with open(self.state_path, encoding="utf-8") as fh:
+                state = json.load(fh)
+            self.banned_until, self.ban_strikes = float(state.get("banned_until", 0)), int(state.get("strikes", 0))
+            if self.banned_until > time.time():
+                log.warning("AniDB ban from before the restart still active until %s: cache only",
+                            time.strftime("%Y-%m-%d %H:%M", time.localtime(self.banned_until)))
+        except (OSError, ValueError):
+            pass
+
+    def _save_state(self):
+        if not self.state_path:
+            return
+        try:
+            tmp = self.state_path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump({"banned_until": self.banned_until, "strikes": self.ban_strikes}, fh)
+            os.replace(tmp, self.state_path)
+        except OSError as exc:
+            log.warning("Could not save AniDB ban state: %s", exc)
 
 
 def _cache_ttl(enddate: str) -> float:

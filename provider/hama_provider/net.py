@@ -89,7 +89,7 @@ class Fetcher:
             fh.write(data)
         os.replace(tmp, path)
 
-    def prune(self, max_age_days: float, keep=("AniDB/xml", "AniDB/anime-titles.xml", "AnimeLists", "TheTVDB")) -> int:
+    def prune(self, max_age_days: float, keep=("AniDB/xml", "AniDB/anime-titles", "AnimeLists", "TheTVDB")) -> int:
         """Delete cache files not refreshed for max_age_days. Never pruned: AniDB XML (strict rate limits) and TheTVDB
         (if its legacy API disappears, the cache is the only source of TVDB numbering)."""
         if max_age_days <= 0 or not os.path.isdir(self.cache_dir):
