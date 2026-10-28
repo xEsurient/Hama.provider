@@ -583,6 +583,7 @@ class ServiceTests(unittest.TestCase):
         svc.titledb.titles = TITLES
         svc.titledb.index = [(cleanse_title(t), aid, t) for aid, ts in TITLES.items() for _, _, t in ts]
         svc.titledb.ready.set()
+        svc.titledb.direct_allowed = lambda: False  # a search miss must never download AniDB's real title dump
         svc.lists.by_aid = {"23": {"tvdbid": "76885", "tmdbtv": "30991", "tmdbid": "", "imdbid": "", "studio": "Sunrise",
                                    "defaulttvdbseason": "1", "episodeoffset": "", "tmdbseason": "1",
                                    "tmdboffset": "", "mappings": []}}
