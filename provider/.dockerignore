@@ -1,0 +1,13 @@
+data/
+config.json
+install/docker/data/
+install/docker/media/
+.env
+**/.env
+**/__pycache__/
+
+# Local project docs, Claude memory & dev tooling (not committed by default)
+_claude/
+CLAUDE.local.md
+.claude/
+.DS_Store

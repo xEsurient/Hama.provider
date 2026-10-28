@@ -1,0 +1,18 @@
+# systemd unit for the HAMA Plex metadata provider. install.sh fills in the paths.
+[Unit]
+Description=HAMA Plex metadata provider (AniDB)
+After=network-online.target
+Wants=network-online.target
+Before=plexmediaserver.service
+
+[Service]
+Type=simple
+User=@USER@
+WorkingDirectory=@DIR@
+ExecStart=/usr/bin/env python3 @DIR@/run.py
+Restart=on-failure
+RestartSec=10
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

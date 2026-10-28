@@ -1,0 +1,31 @@
+# HAMA provider in Docker.
+#   cp .env.example .env     # optional: your settings/secrets (.env is git-ignored, never commit it)
+#   docker compose up -d --build
+#
+# Plex provider URLs:
+#   Plex in Docker on the same network as this container -> http://hama-provider:32550/tv  (and /tvdb, /movies)
+#   Plex installed on the Docker host                     -> http://<docker-host-ip>:32550/tv
+#   Option B below (shared network with the Plex container) -> http://127.0.0.1:32550/tv
+services:
+  hama-provider:
+    build:
+      context: ../..
+      dockerfile: install/docker/Dockerfile
+    image: hama-provider:latest
+    container_name: hama-provider
+    restart: unless-stopped
+    user: "${PUID:-1000}:${PGID:-1000}"     # same owner as your media, so 'prepare --apply' can rename files
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      TZ: ${TZ:-UTC}
+    volumes:
+      - ${HAMA_DATA_DIR_HOST:-./data}:/data                 # cache, config.json, anime-list-custom.xml (chown it to PUID:PGID)
+      - ${MEDIA_DIR:-./media}:/media:${MEDIA_MODE:-ro}      # your anime folders, for 'prepare' (ro = preview only)
+    # Option A (default): own network, reachable on port 32550.
+    ports:
+      - "32550:32550"
+    # Option B: share the Plex container's network instead (remove 'ports' above). The provider then talks to Plex
+    # over 127.0.0.1, so the collection sync needs no token: set HAMA_PLEX_URL=http://127.0.0.1:32400 in .env.
+    # network_mode: "container:plex"

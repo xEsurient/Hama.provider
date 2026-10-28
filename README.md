@@ -1,6 +1,33 @@
-HTTP AniDB Metadata Agent (HAMA)
-================================
-HAMA is a Plex Metadata Agent, initially created By Atomicstrawberry through v0.4 [2015-08-31].
+HAMA – AniDB Metadata Provider for Plex
+=======================================
+*Formerly HAMA, the HTTP AniDB Metadata Agent.*
+
+HAMA started as a Plex Metadata Agent (now a Plex Custom Metadata Provider, see below), initially created By Atomicstrawberry through v0.4 [2015-08-31].
+
+*Forked from [ZeroQI/Hama.bundle](https://github.com/ZeroQI/Hama.bundle) (maintained by ZeroQI since v0.5); based on its `master` branch as of 2026-10-27.*
+
+## HAMA Provider for the new Plex agents (PMS 1.43+)
+
+Plex is removing legacy `.bundle` agents (like `Hama.bundle` below) in 2026. [`provider/`](provider/README.md) is HAMA rebuilt as a
+Plex **Custom Metadata Provider**: a small Python 3.8+ service (no dependencies) that Plex calls for matching and metadata.
+
+- **Same HAMA matching:** AniDB title database, `[anidb-…]`/`[tvdb-…]` folder tags, Anime-Lists mapping, title language priorities, specials numbering.
+- **Title logos (clearLogo)** for the new Plex apps, plus AniList/AniDB/TVDB/fanart.tv/TMDB artwork, episode thumbnails, theme songs and TMDB ratings.
+- **Two TV modes:**
+  - *AniDB numbering*: one show per AniDB entry.
+  - *TVDB seasons*: one show per series, with the AniDB entries mapped into TVDB seasons.
+  - Per-show episode orderings for long shows: absolute, seasons with absolute numbers, story arcs, and TheMovieDb.
+- **Beyond anime:** shows and movies AniDB doesn't know are matched through TheMovieDb/TheTVDB, and work in mixed libraries.
+- **Collections, localised libraries, per-library profiles,** and a status page with a missing-data report.
+- **`prepare` tool** turns Absolute Series Scanner folder layouts into ones Plex's own scanner understands, with preview and undo.
+- **Docker-ready:** your settings and secrets go in a git-ignored `.env` (see [`provider/install/docker/.env.example`](provider/install/docker/.env.example)).
+
+Start here: [`provider/README.md`](provider/README.md) (setup, settings, Docker).
+Switching an existing HAMA library: [`provider/MIGRATING.md`](provider/MIGRATING.md).
+
+## Legacy agent (Hama.bundle)
+
+The rest of this page describes the original legacy agent in `Contents/`, unchanged from upstream.
 
 Here are HAMA's features:
 
