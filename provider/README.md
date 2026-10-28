@@ -138,7 +138,7 @@ cp .env.example .env               # git-ignored: your paths, PUID/PGID, Plex to
 mkdir -p data && sudo chown 1000:1000 data      # use your PUID:PGID
 docker compose pull && docker compose up -d
 ```
-`HAMA_IMAGE` in `.env` defaults to `ghcr.io/xesurient/hama.provider:latest`; pin a version such as `:1.2.6` if you prefer.
+`HAMA_IMAGE` in `.env` defaults to `ghcr.io/xesurient/hama.provider:latest`; pin a version such as `:1.2.7` if you prefer.
 A plain `docker pull ghcr.io/xesurient/hama.provider:latest` works too. Published GitHub releases also carry
 `hama-provider-docker-<version>.zip` with these files.
 
@@ -287,15 +287,17 @@ Put an `anime-list-custom.xml` in the data folder to override Anime-Lists entrie
 
 ## Releases (maintainers)
 
-1. Bump `__version__` in `hama_provider/__init__.py` and commit.
-2. On GitHub, publish a release whose tag is `v<version>` (for example `v1.2.0`).
-3. `.github/workflows/release.yml` then:
-   - runs the tests on Python 3.8 and 3.12;
-   - refuses a tag that doesn't match `__version__`;
-   - builds the image for linux/amd64, arm64 and arm/v7 and pushes it to `ghcr.io/xesurient/hama.provider:<version>`, `:<major.minor>` and `:latest`;
-   - attaches `hama-provider-docker-<version>.zip`, `hama-provider-<version>.zip` and `SHA256SUMS` to the release.
-4. After the first release, make the package public once on GitHub (*your profile > Packages > the package > Package settings >
-   Change visibility*). Otherwise `docker pull` needs a login.
+Releases are automatic: bump `__version__` in `hama_provider/__init__.py`, commit and push to `main`. When no tag `v<version>` exists
+yet, `.github/workflows/release.yml`:
+- runs the tests on Python 3.8 and 3.12;
+- builds the image for linux/amd64, arm64 and arm/v7 and pushes it to `ghcr.io/xesurient/hama.provider:<version>`, `:<major.minor>` and `:latest`;
+- creates the GitHub release `v<version>` (notes generated from the commits) with `hama-provider-docker-<version>.zip`,
+  `hama-provider-<version>.zip` and `SHA256SUMS`.
+
+A push without a version bump only runs the tests (the Actions log says the version is already released), so a published image is
+never replaced. Pushes that only change `.md` files don't run the workflow. A release published by hand with tag `v<version>` still works.
+After the first release, make the package public once on GitHub (*your profile > Packages > the package > Package settings >
+Change visibility*). Otherwise `docker pull` needs a login.
 
 The assets can be built locally with `python3 install/release/make_assets.py --image ghcr.io/xesurient/hama.provider`, and the image with
 `install/docker/build.sh`. Running the workflow by hand (*Actions > Release > Run workflow*) can push an image without making a release.

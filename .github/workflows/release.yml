@@ -1,13 +1,21 @@
-# Release: publish a GitHub release with a tag like v1.2.0 (matching provider/hama_provider/__init__.py).
-# Then this workflow:
+# Release: bump __version__ in provider/hama_provider/__init__.py and push to main. When no tag v<version> exists yet, this workflow:
 #   1. runs the tests (Python 3.8 and 3.12)
-#   2. builds the Docker image for amd64/arm64/arm-v7 and pushes it to ghcr.io/xesurient/hama.provider:<version> and :latest
-#   3. attaches the Docker bundle (compose.yml + .env.example) and the provider zip to the release
+#   2. builds the Docker image for amd64/arm64/arm-v7 and pushes it to ghcr.io/xesurient/hama.provider:<version>, :<major.minor> and :latest
+#   3. creates the GitHub release v<version> with the Docker bundle (compose.yml + .env.example), the provider zip and SHA256SUMS
+# Pushes without a version bump (or only changing .md files) run the tests and publish nothing, so a released image is never overwritten.
+# A release published by hand (tag v<version>) still works and gets the image and assets. Actions > Release > Run workflow can push
+# the image for the current version without a release.
 # Afterwards users only need:  docker pull ghcr.io/xesurient/hama.provider:latest   (or the Docker bundle from the release page)
 # First release: make the package public once (GitHub > your profile > Packages > the package > Package settings > Change visibility).
 name: Release
 
 on:
+  push:
+    branches: [main, master]
+    paths:
+      - "provider/**"
+      - "!provider/**/*.md"
+      - ".github/workflows/release.yml"
   release:
     types: [published]
   workflow_dispatch:
@@ -17,8 +25,12 @@ on:
         type: boolean
         default: false
 
+concurrency:            # one run at a time; a newer push waits, so two runs never release the same version
+  group: release
+  cancel-in-progress: false
+
 permissions:
-  contents: write      # attach release assets
+  contents: write      # create releases, attach assets
   packages: write      # push to ghcr.io
 
 jobs:
@@ -39,21 +51,36 @@ jobs:
     outputs:
       version: ${{ steps.v.outputs.version }}
       image: ${{ steps.v.outputs.image }}
+      publish: ${{ steps.v.outputs.publish }}
     steps:
       - uses: actions/checkout@v4
       - id: v
-        name: Check the tag matches the code version
+        name: Read the code version and decide whether to publish
         run: |
           VERSION=$(sed -n 's/^__version__ = "\(.*\)"/\1/p' provider/hama_provider/__init__.py)
-          if [ "${{ github.event_name }}" = "release" ] && [ "${{ github.event.release.tag_name }}" != "v$VERSION" ]; then
-            echo "::error::Release tag ${{ github.event.release.tag_name }} doesn't match provider version v$VERSION"; exit 1
-          fi
+          PUBLISH=false
+          case "${{ github.event_name }}" in
+            release)
+              if [ "${{ github.event.release.tag_name }}" != "v$VERSION" ]; then
+                echo "::error::Release tag ${{ github.event.release.tag_name }} doesn't match provider version v$VERSION"; exit 1
+              fi
+              PUBLISH=true ;;
+            push)
+              if git ls-remote --exit-code --tags origin "refs/tags/v$VERSION" >/dev/null; then
+                echo "::notice::v$VERSION is already released; bump __version__ to publish this change"
+              else
+                PUBLISH=true
+              fi ;;
+            workflow_dispatch)
+              PUBLISH=${{ inputs.push_image }} ;;
+          esac
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "publish=$PUBLISH" >> "$GITHUB_OUTPUT"
           echo "image=ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
 
   image:
     needs: [test, version]
-    if: github.event_name == 'release' || inputs.push_image
+    if: needs.version.outputs.publish == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -85,15 +112,21 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
 
-  assets:
-    needs: [test, version]
-    if: github.event_name == 'release'
+  release:
+    needs: [version, image]     # only after the image is pushed, so a release always has its image
+    if: needs.version.outputs.publish == 'true' && github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: Build release assets
         run: python3 provider/install/release/make_assets.py --image "${{ needs.version.outputs.image }}" --version "${{ needs.version.outputs.version }}" --out dist
-      - name: Attach to the release
+      - name: Create the release (push) or attach to it (release published by hand)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "${{ github.event.release.tag_name }}" dist/* --clobber
+          TAG: v${{ needs.version.outputs.version }}
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            gh release upload "$TAG" dist/* --clobber
+          else
+            gh release create "$TAG" dist/* --target "$GITHUB_SHA" --title "$TAG" --generate-notes
+          fi
