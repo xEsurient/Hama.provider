@@ -130,15 +130,17 @@ same machine. If Plex is elsewhere, set `"host": "0.0.0.0"`. The Docker image al
 
 ### Docker
 
-**From a release (recommended).** Download `hama-provider-docker-<version>.zip` from the [Releases](https://github.com/xesurient/hama.provider/releases) page. It contains
-`compose.yml`, `.env.example` (with `HAMA_IMAGE` already set) and `INSTALL.md`. Unzip it anywhere; it doesn't need the rest of the repository.
+**From the image (recommended).** The image is published at
+[ghcr.io/xesurient/hama.provider](https://github.com/xesurient/hama.provider/pkgs/container/hama.provider) for amd64, arm64 and arm/v7.
+Copy `provider/install/docker/compose.yml` and `.env.example` anywhere (they don't need the rest of the repository), then:
 ```
 cp .env.example .env               # git-ignored: your paths, PUID/PGID, Plex token, API keys, profiles
 mkdir -p data && sudo chown 1000:1000 data      # use your PUID:PGID
 docker compose pull && docker compose up -d
 ```
-Or use `provider/install/docker/compose.yml` + `.env.example` directly, with `HAMA_IMAGE=ghcr.io/xesurient/hama.provider:latest`
-(or a version such as `:1.2.5`) in `.env`. The image is also available with a plain `docker pull ghcr.io/xesurient/hama.provider:latest`, for amd64, arm64 and arm/v7.
+`HAMA_IMAGE` in `.env` defaults to `ghcr.io/xesurient/hama.provider:latest`; pin a version such as `:1.2.6` if you prefer.
+A plain `docker pull ghcr.io/xesurient/hama.provider:latest` works too. Published GitHub releases also carry
+`hama-provider-docker-<version>.zip` with these files.
 
 **From source** (inside the repository):
 ```
