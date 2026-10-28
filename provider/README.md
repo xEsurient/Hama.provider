@@ -110,7 +110,8 @@ of their own. Afterwards let Plex scan the library (or *Refresh All Metadata*).
 | Windows | Install Python from python.org and tick *Add to PATH*. Then in an **admin** PowerShell: `powershell -ExecutionPolicy Bypass -File install\windows\install.ps1`. This adds a startup task; remove it with `-Uninstall`. To run it once by hand: `install\windows\start-hama-provider.cmd` |
 | Anything else | `python3 run.py` |
 
-Open `http://127.0.0.1:32550/` in a browser to check that it's running. That page also shows the effective settings, with keys and the token masked.
+Open `http://127.0.0.1:32550/` in a browser to check that it's running. For monitoring tools: `GET /health` returns
+`200 {"status": "ok"}` when ready and `503` while it's still loading (the Docker image's healthcheck uses it). That page also shows the effective settings, with keys and the token masked.
 
 The provider must be reachable **from the Plex server**. By default it listens on `127.0.0.1`, which only works when Plex runs on the
 same machine. If Plex is elsewhere, set `"host": "0.0.0.0"`. The Docker image already does this.

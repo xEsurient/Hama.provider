@@ -209,6 +209,9 @@ class Service:
                 except Exception:
                     log.exception("Daily reload failed")
 
+    def status_version(self) -> str:
+        return __version__
+
     def status(self) -> dict:
         files, size = self.fetcher.size()
         return {"version": __version__, "ready": self.titledb.ready.is_set(), "anime": len(self.titledb.titles),

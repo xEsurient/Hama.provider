@@ -73,6 +73,18 @@ class Handler(BaseHTTPRequestHandler):
         page = items[offset:offset + max(0, size)]
         return self._container(kind, "Metadata", page, offset, len(items))
 
+    def _unhandled(self, method: str):
+        """Requests under a provider path (/tv/…, /tvdb/…, /movies/…, profiles) come from Plex: worth an event on /report
+        (e.g. a feature Plex tries that HAMA doesn't serve). Anything else (browsers, scanners) only goes to the debug log."""
+        path = urlsplit(self.path).path
+        first = path.strip("/").split("/", 1)[0]
+        if self.service.resolve(first):
+            log.info("Unhandled %s %s", method, TOKEN_RE.sub(r"\1***", self.path))
+            self.service.events.add("unhandled request", "Plex %s %s, which HAMA doesn't serve"
+                                    % ("asked for" if method == "GET" else "sent POST", path))
+        else:
+            log.debug("Unknown %s %s", method, TOKEN_RE.sub(r"\1***", self.path))
+
     def _route(self, regex=ROUTE_RE):
         """Match the path; returns (base kind, *groups) with the profile selected for this request, or None."""
         parts = urlsplit(self.path)
@@ -96,6 +108,14 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, status)
             if path.rstrip("/") == "/report":
                 return self._send_html(report_page(self.service.issues.all(), self.service.events.all()))
+            if path.rstrip("/") == "/health":  # for Docker / uptime monitors: 200 when ready, 503 while loading
+                ready = self.service.titledb.ready.is_set() and self.service.lists.ready.is_set()
+                return self._send(200 if ready else 503, {"status": "ok" if ready else "starting",
+                                                          "version": self.service.status_version()})
+            if path == "/favicon.ico":
+                self.send_response(204)
+                self.end_headers()
+                return
             m = self._route()
             if not m:
                 c = self._route(COLLECTION_ROUTE_RE)
@@ -106,9 +126,7 @@ class Handler(BaseHTTPRequestHandler):
                         return self._send(200, self._paged(kind, []))
                     item = self.service.collection(kind, key, self._lang())
                     return self._send(404, None) if item is None else self._send(200, self._container(kind, "Metadata", [item]))
-                log.info("Unhandled GET %s", TOKEN_RE.sub(r"\1***", self.path))  # e.g. features PMS tries that we don't serve
-                self.service.events.add("unhandled request", "Plex asked for %s, which HAMA doesn't serve"
-                                        % TOKEN_RE.sub(r"\1***", urlsplit(self.path).path))
+                self._unhandled("GET")
                 return self._send(404, {"error": "not found"})
             kind, rating_key, sub = m
             if not rating_key:
@@ -137,9 +155,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             m = self._route()
             if not m or m[1] != "matches":
-                log.info("Unhandled POST %s", TOKEN_RE.sub(r"\1***", self.path))
-                self.service.events.add("unhandled request", "Plex sent POST %s, which HAMA doesn't serve"
-                                        % TOKEN_RE.sub(r"\1***", urlsplit(self.path).path))
+                self._unhandled("POST")
                 return self._send(404, {"error": "not found"})
             kind = m[0]
             try:  # only a malformed request body is the client's fault (400); anything later is ours (500)

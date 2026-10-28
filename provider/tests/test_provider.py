@@ -794,6 +794,10 @@ class ServiceTests(unittest.TestCase):
             FakeAniDB.anime = orig
             svc._models.clear()
         self.get("/tv/markers/123")                                                     # something Plex might ask for
+        with urllib.request.urlopen(self.base + "/favicon.ico") as resp:
+            self.assertEqual(resp.status, 204)
+        self.get("/wp-login.php")                                                       # not Plex: no event
+        self.assertEqual(self.get("/health"), (200, {"status": "ok", "version": svc.status_version()}))
         kinds = [e["kind"] for e in svc.events.all()]
         self.assertIn("adult skipped", kinds)
         self.assertIn("unhandled request", kinds)
@@ -801,6 +805,8 @@ class ServiceTests(unittest.TestCase):
             html = resp.read().decode()
         self.assertIn("Recent events", html)
         self.assertIn("/tv/markers/123", html)
+        self.assertNotIn("wp-login", html)
+        self.assertNotIn("favicon", html)
 
     def test_rescue_unmatched(self):
         calls = []

@@ -19,5 +19,5 @@ VOLUME /data
 EXPOSE 32550
 USER 1000:1000
 HEALTHCHECK --interval=60s --timeout=10s --start-period=120s --retries=3 \
-    CMD python -c "import json,os,urllib.request; p=os.environ.get('HAMA_PORT','32550'); json.load(urllib.request.urlopen('http://127.0.0.1:%s/' % p, timeout=8))" || exit 1
+    CMD python -c "import os,urllib.request; urllib.request.urlopen('http://127.0.0.1:%s/health' % os.environ.get('HAMA_PORT', '32550'), timeout=8)" || exit 1
 CMD ["python", "-m", "hama_provider"]
