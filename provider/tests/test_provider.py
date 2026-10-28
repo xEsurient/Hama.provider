@@ -814,6 +814,7 @@ class ServiceTests(unittest.TestCase):
         entry = dict(self.svc.issues.all())["anidb-219"]
         self.assertEqual(set(entry["issues"]), {"no_mapping", "anidb_unavailable", "no_summary", "no_poster", "no_logo"})
         self.assertIn("anime-lists/issues/new", entry["issues"]["no_mapping"]["link"])
+        self.assertIn("anidb-219", self.svc.prefetch._waiting)                       # retried in the background after a ban
         req = urllib.request.Request(self.base + "/report")
         with urllib.request.urlopen(req) as resp:
             html = resp.read().decode()
@@ -935,6 +936,10 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(svc._movie_episode_title(movie_model, {"season": 1, "index": 1}), "Sen to Chihiro")
         series = dict(movie_model, anime={"type": "TV Series", "episodes": [{"season": 1, "index": 1}, {"season": 1, "index": 2}]})
         self.assertEqual(svc._movie_episode_title(series, {"season": 1, "index": 1}), "")
+        report = dict(movie_model, aid="199", ids=("", "129", ""), images=[], root="anidb-199")
+        with svc._report_lock:
+            svc._report_show_locked("tv", report)
+        self.assertNotIn("no_mapping", report["issues"])                                  # a movie needs no TVDB id
 
     def test_match_paths(self):
         self.assertEqual(self.match("tv", {"type": 2, "title": "Cowboy Bebop"})[0]["ratingKey"], "anidb-23")

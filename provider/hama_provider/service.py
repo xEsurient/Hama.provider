@@ -507,6 +507,8 @@ class Service:
         titles = anime["titles"] if anime else self.titledb.titles.get(aid)
         if not titles:
             return None
+        if anime is None:  # ban/API error: fetch it in the background, then Plex refreshes the item (with plex_url)
+            self.prefetch.add(kind, "anidb-%s" % aid, [aid])
         mapping = self.lists.get(aid)
         tvdbid = mapping.get("tvdbid", "") if mapping.get("tvdbid", "").isdigit() else ""
         model = {"root": "anidb-%s" % aid, "mode": "anidb", "lang": lang, "aid": aid, "anime": anime, "mapping": mapping,
@@ -691,9 +693,10 @@ class Service:
         for code in ("no_mapping", "anidb_unavailable", "no_summary", "no_poster", "no_logo"):
             issues.pop(code, None)
         link = ANIME_LISTS_ISSUE.format(aid=aid, title=quote(fields["title"])) if aid else None
-        if aid and kind != "movies" and model["mode"] == "anidb" and not model["tvdbid"]:
+        movie = self._uses_movie_art(kind, model) or (model.get("mapping") or {}).get("tvdbid") == "movie"
+        if aid and not movie and model["mode"] == "anidb" and not model["tvdbid"]:
             issues["no_mapping"] = {"text": "No TVDB id in Anime-Lists: no episode thumbnails, TVDB seasons or franchise collection", "link": link}
-        if aid and kind == "movies" and not any(self._external_ids(kind, model)[1:]):
+        if aid and movie and not any(self._external_ids(kind, model)[1:]):
             issues["no_mapping"] = {"text": "No TMDB/IMDb id in Anime-Lists: no logo, background or TMDB collection", "link": link}
         if aid and not model["anime"]:
             issues["anidb_unavailable"] = {"text": "AniDB details not loaded (API error or ban); refresh the item later", "link": None}
