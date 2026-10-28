@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Build the release assets (used by .github/workflows/release.yml, also runnable by hand):
 
-  python3 provider/install/release/make_assets.py --image ghcr.io/<owner>/<repo> [--version 1.2.0] [--out dist]
+  python3 provider/install/release/make_assets.py --image ghcr.io/xesurient/hama.provider [--version 1.2.0] [--out dist]
 
   dist/hama-provider-docker-<version>.zip   compose.yml + .env.example (HAMA_IMAGE pre-filled) + INSTALL.md: all you need for 'docker pull'
   dist/hama-provider-<version>.zip          the provider itself, for installs without Docker (Linux/Windows/any Python 3.8+)

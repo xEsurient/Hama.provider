@@ -10,7 +10,7 @@
 #   Option B below (shared network with the Plex container) -> http://127.0.0.1:32550/tv
 services:
   hama-provider:
-    image: ${HAMA_IMAGE:-hama-provider:local}
+    image: ${HAMA_IMAGE:-ghcr.io/xesurient/hama.provider:latest}
     container_name: hama-provider
     restart: unless-stopped
     user: "${PUID:-1000}:${PGID:-1000}"     # same owner as your media, so 'prepare --apply' can rename files

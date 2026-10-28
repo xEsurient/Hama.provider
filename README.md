@@ -20,7 +20,7 @@ Plex **Custom Metadata Provider**: a small Python 3.8+ service (no dependencies)
 - **Beyond anime:** shows and movies AniDB doesn't know are matched through TheMovieDb/TheTVDB, and work in mixed libraries.
 - **Collections, localised libraries, per-library profiles,** and a status page with a missing-data report.
 - **`prepare` tool** turns Absolute Series Scanner folder layouts into ones Plex's own scanner understands, with preview and undo.
-- **Docker-ready:** `docker pull ghcr.io/<owner>/<repo>:latest`, or the Docker bundle from the *Releases* page (compose.yml + .env.example).
+- **Docker-ready:** `docker pull ghcr.io/xesurient/hama.provider:latest`, or the Docker bundle from the [Releases](https://github.com/xesurient/hama.provider/releases) page (compose.yml + .env.example).
   Your settings and secrets go in a git-ignored `.env`.
 
 Start here: [`provider/README.md`](provider/README.md) (setup, settings, Docker).

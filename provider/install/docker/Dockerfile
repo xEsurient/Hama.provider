@@ -6,6 +6,7 @@ ARG VERSION=dev
 LABEL org.opencontainers.image.title="HAMA provider" \
       org.opencontainers.image.description="HAMA – AniDB metadata provider for Plex (custom metadata provider, PMS 1.43+)" \
       org.opencontainers.image.licenses="GPL-3.0-only" \
+      org.opencontainers.image.source="https://github.com/xesurient/hama.provider" \
       org.opencontainers.image.version="${VERSION}"
 WORKDIR /app
 COPY hama_provider ./hama_provider

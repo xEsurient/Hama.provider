@@ -1,9 +1,9 @@
 # Release: publish a GitHub release with a tag like v1.2.0 (matching provider/hama_provider/__init__.py).
 # Then this workflow:
 #   1. runs the tests (Python 3.8 and 3.12)
-#   2. builds the Docker image for amd64/arm64/arm-v7 and pushes it to ghcr.io/<owner>/<repo>:<version> and :latest
+#   2. builds the Docker image for amd64/arm64/arm-v7 and pushes it to ghcr.io/xesurient/hama.provider:<version> and :latest
 #   3. attaches the Docker bundle (compose.yml + .env.example) and the provider zip to the release
-# Afterwards users only need:  docker pull ghcr.io/<owner>/<repo>:latest   (or the Docker bundle from the release page)
+# Afterwards users only need:  docker pull ghcr.io/xesurient/hama.provider:latest   (or the Docker bundle from the release page)
 # First release: make the package public once (GitHub > your profile > Packages > the package > Package settings > Change visibility).
 name: Release
 

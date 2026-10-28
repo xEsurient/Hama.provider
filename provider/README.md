@@ -78,6 +78,17 @@ What Plex's scanner does with typical anime files (tested on PMS 1.43.5):
 
 The `prepare` tool below fixes the first two points (and more) for you.
 
+## Anime movies in a TV library
+
+Plex only combines providers that supply the same kind of items, so the *HAMA – Anime Movies* provider can't be added to a TV agent.
+You don't need it there. On AniDB a movie is an entry with one episode, so the TV provider (AniDB numbering) shows it as a
+one-episode show with the movie's title, summary, poster, **logo** and background (from its TMDB movie entry). Tested on PMS 1.43.5.
+
+The catch is Plex's TV scanner: it **skips** a movie file without an episode number (`Movie (2016).mkv`, `Movie - Complete Movie.mkv`).
+Name it `Movie - 01.mkv`, or let `prepare` do it (a folder's only video becomes `<folder> - 01.mkv`).
+A separate Movie library with the *HAMA – Anime Movies* agent gives the full movie experience: movie-style pages, TMDB collections
+and non-anime films.
+
 ## Preparing Absolute Series Scanner libraries (`prepare`)
 
 `prepare` looks at a library folder and lists what to change so that Plex's own scanner reads it the way ASS did:
@@ -90,7 +101,8 @@ The `prepare` tool below fixes the first two points (and more) for you.
 | ASS offset folders `Arc 2 -s2e12` | files renamed with the offset applied (`- 01` → `S02E13`) |
 | `[tvdb2-79824]` folders with absolute files | renamed to TVDB season/episode (`- 250` → `S12E08`), from TheTVDB |
 | `[anidb2-123]` folders | the AniDB entry's absolute numbers mapped into TVDB seasons (Anime-Lists) |
-| Video files without any episode number | listed as warnings, so you can rename them yourself |
+| A folder's only video without an episode number (a movie: `Movie (2016).mkv`, `… - Complete Movie.mkv`) | renamed `<folder> - 01.mkv`, so the TV scanner picks it up |
+| Other video files without any episode number | listed as warnings, so you can rename them yourself |
 
 ```
 python3 run.py --prepare /path/to/anime            # preview only
@@ -118,15 +130,15 @@ same machine. If Plex is elsewhere, set `"host": "0.0.0.0"`. The Docker image al
 
 ### Docker
 
-**From a release (recommended).** Download `hama-provider-docker-<version>.zip` from the repository's *Releases* page. It contains
+**From a release (recommended).** Download `hama-provider-docker-<version>.zip` from the [Releases](https://github.com/xesurient/hama.provider/releases) page. It contains
 `compose.yml`, `.env.example` (with `HAMA_IMAGE` already set) and `INSTALL.md`. Unzip it anywhere; it doesn't need the rest of the repository.
 ```
 cp .env.example .env               # git-ignored: your paths, PUID/PGID, Plex token, API keys, profiles
 mkdir -p data && sudo chown 1000:1000 data      # use your PUID:PGID
 docker compose pull && docker compose up -d
 ```
-Or use `provider/install/docker/compose.yml` + `.env.example` directly, with `HAMA_IMAGE=ghcr.io/<owner>/<repo>:latest`
-(or `:1.2.0`) in `.env`. The image is also available with a plain `docker pull ghcr.io/<owner>/<repo>:latest`, for amd64, arm64 and arm/v7.
+Or use `provider/install/docker/compose.yml` + `.env.example` directly, with `HAMA_IMAGE=ghcr.io/xesurient/hama.provider:latest`
+(or a version such as `:1.2.5`) in `.env`. The image is also available with a plain `docker pull ghcr.io/xesurient/hama.provider:latest`, for amd64, arm64 and arm/v7.
 
 **From source** (inside the repository):
 ```
@@ -278,12 +290,12 @@ Put an `anime-list-custom.xml` in the data folder to override Anime-Lists entrie
 3. `.github/workflows/release.yml` then:
    - runs the tests on Python 3.8 and 3.12;
    - refuses a tag that doesn't match `__version__`;
-   - builds the image for linux/amd64, arm64 and arm/v7 and pushes it to `ghcr.io/<owner>/<repo>:<version>`, `:<major.minor>` and `:latest`;
+   - builds the image for linux/amd64, arm64 and arm/v7 and pushes it to `ghcr.io/xesurient/hama.provider:<version>`, `:<major.minor>` and `:latest`;
    - attaches `hama-provider-docker-<version>.zip`, `hama-provider-<version>.zip` and `SHA256SUMS` to the release.
 4. After the first release, make the package public once on GitHub (*your profile > Packages > the package > Package settings >
    Change visibility*). Otherwise `docker pull` needs a login.
 
-The assets can be built locally with `python3 install/release/make_assets.py --image ghcr.io/<owner>/<repo>`, and the image with
+The assets can be built locally with `python3 install/release/make_assets.py --image ghcr.io/xesurient/hama.provider`, and the image with
 `install/docker/build.sh`. Running the workflow by hand (*Actions > Release > Run workflow*) can push an image without making a release.
 
 ## Development

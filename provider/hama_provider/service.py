@@ -792,6 +792,14 @@ class Service:
             self._report_episodes(model, season)
         return model["episodes"][season]
 
+    def _movie_episode_title(self, model: dict, ep: dict) -> str:
+        """AniDB movies are one-episode entries titled 'Complete Movie': show the movie's own title instead."""
+        anime = model.get("anime") or {}
+        regular = [e for e in anime.get("episodes", []) if e["season"] == 1]
+        if anime.get("type") == "Movie" and ep["season"] == 1 and len(regular) == 1:
+            return model["fields"]["title"]
+        return ""
+
     def _ep_title(self, titles, lang: str) -> str:
         title, _main = pick_title(titles, self._languages(self.cfg.episode_language_priority, lang))
         return title
@@ -812,7 +820,8 @@ class Service:
             tv = tvdb_eps.get(inverse.get((e["season"], e["index"])), {})
             out.append({"anidb": (model["aid"], e["season"], e["index"]), "src_key": None,
                         "season": season, "index": e["index"], "epno": e["epno"],
-                        "title": self._ep_title(e["titles"], lang) or tv.get("episodeName") or "Episode %s" % e["epno"],
+                        "title": self._movie_episode_title(model, e) or self._ep_title(e["titles"], lang) or tv.get("episodeName")
+                                 or "Episode %s" % e["epno"],
                         "summary": e["summary"] or tv.get("overview") or "", "airdate": e["airdate"] or tv.get("firstAired") or "",
                         "duration": e["duration"], "thumb": thumb(tv) if tv else ""})
         return out
@@ -888,7 +897,7 @@ class Service:
         return item
 
     def _show_images(self, kind: str, model: dict, lang: str) -> list[dict]:
-        cfg, movie = self.cfg, kind == "movies"
+        cfg, movie = self.cfg, self._uses_movie_art(kind, model)
         tvdb, tmdb, imdb = self._external_ids(kind, model)
         sources = set(cfg.poster_sources + cfg.background_sources + cfg.logo_sources + cfg.season_poster_sources)
         found = {}
@@ -915,10 +924,19 @@ class Service:
                   {t: sum(1 for i in out if i["type"] == t) for t in ("coverPoster", "background", "clearLogo")})
         return out
 
+    def _uses_movie_art(self, kind: str, model: dict) -> bool:
+        """Movie artwork/ids: movie libraries, and AniDB movies in a TV library (AniDB numbering) that Anime-Lists maps to a
+        TMDB *movie* rather than a TV series (Plex can't combine the movie provider with a TV agent)."""
+        if kind == "movies":
+            return True
+        mapping = model.get("mapping") or {}
+        return (model.get("mode") == "anidb" and not model.get("tvdbid") and not mapping.get("tmdbtv", "").isdigit()
+                and (mapping.get("tmdbid", "").split(",")[0].strip().isdigit() or mapping.get("imdbid", "").startswith("tt")))
+
     def _external_ids(self, kind: str, model: dict) -> tuple[str, str, str]:
         """(tvdb, tmdb, imdb) for a show/movie, resolving TMDB through /find when Anime-Lists has none."""
         if "ids" not in model:
-            movie, mapping = kind == "movies", model["mapping"]
+            movie, mapping = self._uses_movie_art(kind, model), model["mapping"]
             tvdb = model["tvdbid"]
             imdb = mapping.get("imdbid", "").split(",")[0].strip() or (model.get("series") or {}).get("imdbId") or ""
             tmdb = mapping.get("tmdbid", "").split(",")[0].strip() if movie else mapping.get("tmdbtv", "")
@@ -962,7 +980,7 @@ class Service:
         localised summary, country certification and production countries."""
         extras = {}
         tvdb, tmdb, _imdb = self._external_ids(kind, model)
-        movie = kind == "movies"
+        movie = self._uses_movie_art(kind, model)
         if tmdb:
             details = self.tmdb.details(movie, tmdb)
             countries = [c["name"] for c in details.get("production_countries") or [] if c.get("name")]

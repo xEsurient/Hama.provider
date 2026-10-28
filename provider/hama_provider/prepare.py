@@ -40,6 +40,7 @@ SPECIAL_PATTERNS = [
     (re.compile(r"^(?:OVA|OAD|Special)$", re.IGNORECASE), 0),
 ]
 SPECIAL_DIR_RE = re.compile(r"^(sps?|specials?|ovas?|oads?)$", re.IGNORECASE)  # BD-rip style specials folders
+MOVIE_NAME_RE = re.compile(r"\b(?:Complete Movie|Movie)\s*$|\(\d{4}\)\s*$", re.IGNORECASE)  # "X - Complete Movie", "X (2016)"
 GROUP_DIR_RE = re.compile(r"^\s*[\[(]\d+[\])]")                              # ASS grouping folder: "[2] Sequel"
 
 
@@ -257,8 +258,11 @@ class Preparer:
             else:
                 plan.add("move", path, target, "grouping folder -> its own show (Plex merges sub-folders into one show)")
 
-        # 3. files: specials, specials folders, offsets, tvdb2/anidb2
+        # 3. files: specials, specials folders, offsets, tvdb2/anidb2, lone movie files
         renumber = self._renumber_map(source, variant, ident)
+        top_videos = [v for v in _videos(show) if os.path.dirname(v) == show]
+        lone_movie = top_videos[0] if len(top_videos) == 1 and not any(
+            os.path.dirname(v) != show and not any(v.startswith(h + os.sep) for h in handled) for v in _videos(show)) else None
         for video in _videos(show):
             if any(video.startswith(h + os.sep) for h in handled):
                 continue  # inside a grouping/unknown folder: prepare again after applying (it is its own show then)
@@ -282,12 +286,17 @@ class Preparer:
                 if new_se is None:
                     plan.add("warn", video, reason="absolute episode %d not found in the TVDB mapping" % number[1])
                     continue
+            elif video == lone_movie and (number is None or MOVIE_NAME_RE.search(stem)):
+                new_se, reason = (1, 1), "only video in the folder (a movie): Plex's TV scanner needs an episode number"
             elif number is None:
                 plan.add("warn", video, reason="no episode number; Plex will skip it (rename it, or use SxxEyy)")
                 continue
             if new_se is None:
                 continue
-            target = os.path.join(folder, "%s - S%02dE%02d%s" % (title, new_se[0], new_se[1], ext))
+            if video == lone_movie and new_se == (1, 1):
+                target = os.path.join(folder, "%s - 01%s" % (title, ext))
+            else:
+                target = os.path.join(folder, "%s - S%02dE%02d%s" % (title, new_se[0], new_se[1], ext))
             if os.path.normcase(target) == os.path.normcase(video):
                 continue
             if os.path.normcase(target) in targets or os.path.exists(target):

@@ -16,7 +16,7 @@ from urllib.parse import urlsplit
 
 log = logging.getLogger("hama.net")
 
-USER_AGENT = "HAMA-Provider/1.0 (Plex custom metadata provider)"
+USER_AGENT = "HAMA-Provider/1.0 (Plex custom metadata provider; +https://github.com/xesurient/hama.provider)"
 DAY = 86400
 HOST_DOWN_SECONDS = 600  # after a connection failure/timeout, skip that host (use cache) for this long
 LOCK_STRIPES = 256
@@ -45,8 +45,18 @@ class Fetcher:
         return sorted(h for h, t in list(self.down_until.items()) if t > now)
 
     def _mark_failure(self, url: str, exc: Exception):
-        """Connection errors/timeouts (not HTTP status errors) take the host out of rotation for a while,
-        so an unreachable API costs one timeout instead of one per request."""
+        """Connection errors/timeouts take the host out of rotation for a while, so an unreachable API costs one timeout
+        instead of one per request. HTTP 429 (too many requests) pauses the host for its Retry-After (default 60 s)."""
+        if isinstance(exc, urllib.error.HTTPError) and exc.code == 429:
+            try:
+                pause = max(5, min(int(exc.headers.get("Retry-After") or 60), 3600))
+            except (TypeError, ValueError):
+                pause = 60
+            host = urlsplit(url).netloc
+            if self.down_until.get(host, 0) <= time.time():
+                log.warning("%s: too many requests, pausing it for %d s (cache used meanwhile)", host, pause)
+            self.down_until[host] = time.time() + pause
+            return
         if isinstance(exc, (urllib.error.HTTPError,) + BODY_ERRORS):  # the host answered (HTTP error / bad body)
             return
         host = urlsplit(url).netloc
@@ -196,7 +206,7 @@ class Fetcher:
                 return _json(resp.read())
         except (urllib.error.URLError, OSError) + BODY_ERRORS as exc:
             self._mark_failure(url, exc)
-            log.warning("POST %s failed: %s", url, exc)
+            (log.debug if getattr(exc, "code", None) == 429 else log.warning)("POST %s failed: %s", url, exc)
             return None
 
 

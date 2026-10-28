@@ -36,7 +36,7 @@ class AniList:
             if self.fetcher.host_down(GRAPHQL_URL):
                 raw = self.fetcher.read_cache(cache)
             else:
-                self.fetcher._wait("anilist", 1.0)  # AniList allows ~90 requests/min
+                self.fetcher._wait("anilist", 2.0)  # AniList: ~90/min nominal, often throttled to ~30/min
                 data = self.fetcher.post_json(GRAPHQL_URL, {"query": QUERY, "variables": {"id": int(al_id)}})
                 if data and (data.get("data") or {}).get("Media"):
                     raw = json.dumps(data).encode("utf-8")

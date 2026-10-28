@@ -53,7 +53,7 @@ def status_page(status: dict, base: str) -> str:
     banned = status["anidb_banned_until"] > time.time()
     sync = status["last_sync"]
     rows = [
-        ("Version", escape(status["version"])),
+        ("Version", '%s (<a href="https://github.com/xesurient/hama.provider/releases">releases</a>)' % escape(status["version"])),
         ("Data loaded", '<span class="%s">%s</span>' % (("ok", "yes") if status["ready"] else ("bad", "loading…"))),
         ("AniDB titles / Anime-Lists mappings", "%d / %d" % (status["anime"], status["mappings"])),
         ("AniDB API", '<span class="bad">banned, cache only until %s</span>' % _when(status["anidb_banned_until"]) if banned

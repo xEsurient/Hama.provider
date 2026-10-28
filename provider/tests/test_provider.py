@@ -99,6 +99,13 @@ def _entry(season, offset="", mappings=()):
 
 
 class HelperTests(unittest.TestCase):
+    def test_env_example_lists_every_setting(self):
+        path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "install", "docker", ".env.example")
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+        missing = [k for k in config.DEFAULTS if "HAMA_%s=" % k.upper() not in text]
+        self.assertEqual(missing, [])
+
     def test_ranges(self):
         from hama_provider.service import _ranges
         self.assertEqual(_ranges([5, 1, 2, 3, 9, 10]), "1-3, 5, 9-10")
@@ -254,6 +261,17 @@ class ReviewRegressionTests(unittest.TestCase):
             self.assertEqual(f.get(url, "x/a.xml", ttl=0), b"<old/>")
             self.assertFalse(f.host_down(url))                # the host answered: not marked down
 
+    def test_http_429_pauses_host(self):
+        import urllib.error
+        from hama_provider.net import Fetcher
+        f = Fetcher(tempfile.mkdtemp())
+        err = urllib.error.HTTPError("https://graphql.anilist.co", 429, "Too Many Requests", {"Retry-After": "30"}, None)
+        f._mark_failure("https://graphql.anilist.co", err)
+        self.assertTrue(f.host_down("https://graphql.anilist.co"))
+        self.assertAlmostEqual(f.down_until["graphql.anilist.co"] - time.time(), 30, delta=3)
+        f._mark_failure("https://other.example", urllib.error.HTTPError("https://other.example", 404, "x", {}, None))
+        self.assertFalse(f.host_down("https://other.example"))
+
     def test_logo_language_library_first(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
@@ -336,6 +354,19 @@ class PrepareTests(unittest.TestCase):
             self.assertEqual(prep.undo(root), 7)
             after = sorted(os.path.relpath(os.path.join(d, f), root) for d, _, fs in os.walk(root) for f in fs if f != UNDO_FILE)
             self.assertEqual(after, before)
+
+    def test_lone_movie_files(self):
+        from hama_provider.prepare import Preparer
+        with tempfile.TemporaryDirectory() as root:
+            self._tree(root, {"Kimi no Na wa (2016) [anidb-11829]/Kimi no Na wa (2016).mkv": "",
+                              "Tenki no Ko/Tenki no Ko - Complete Movie.mkv": "",
+                              "Koe no Katachi/Koe no Katachi.mkv": "",
+                              "Spirited Away/Spirited Away - 01.mkv": "",            # already fine
+                              "Some Show/Some Show - 05.mkv": ""})                    # numbered: an episode, untouched
+            got = {(os.path.relpath(a.path, root), os.path.basename(a.target)) for a in Preparer().plan(root).actions if a.kind == "rename"}
+            self.assertEqual(got, {("Kimi no Na wa (2016) [anidb-11829]/Kimi no Na wa (2016).mkv", "Kimi no Na wa (2016) - 01.mkv"),
+                                   ("Tenki no Ko/Tenki no Ko - Complete Movie.mkv", "Tenki no Ko - 01.mkv"),
+                                   ("Koe no Katachi/Koe no Katachi.mkv", "Koe no Katachi - 01.mkv")})
 
     def test_plexmatch_keeps_user_lines(self):
         from hama_provider.prepare import _write_plexmatch, BLOCK_BEGIN
@@ -858,11 +889,17 @@ class ServiceTests(unittest.TestCase):
         self.get("/tv/markers/123")                                                     # something Plex might ask for
         with urllib.request.urlopen(self.base + "/favicon.ico") as resp:
             self.assertEqual(resp.status, 204)
+        svc.base_cfg["experimental_markers"] = True
+        try:
+            self.get("/tv/library/metadata/anidb-23?includeMarkers=1")                  # markers as a query option
+        finally:
+            svc.base_cfg["experimental_markers"] = False
         self.get("/wp-login.php")                                                       # not Plex: no event
         self.assertEqual(self.get("/health"), (200, {"status": "ok", "version": svc.status_version()}))
         kinds = [e["kind"] for e in svc.events.all()]
         self.assertIn("adult skipped", kinds)
         self.assertIn("unhandled request", kinds)
+        self.assertIn("markers request", kinds)
         with urllib.request.urlopen(self.base + "/report") as resp:
             html = resp.read().decode()
         self.assertIn("Recent events", html)
@@ -888,6 +925,16 @@ class ServiceTests(unittest.TestCase):
         self.assertIn(("PUT", "/library/metadata/2/refresh"), calls)
         self.assertNotIn(("PUT", "/library/metadata/1/refresh"), calls)
         self.assertFalse(any(p.startswith("/library/sections/8") for _, p in calls))
+
+    def test_movie_in_tv_library(self):
+        svc = self.svc
+        movie_model = {"mode": "anidb", "tvdbid": "", "mapping": {"tvdbid": "movie", "tmdbid": "129", "tmdbtv": ""},
+                       "anime": {"type": "Movie", "episodes": [{"season": 1, "index": 1}]}, "fields": {"title": "Sen to Chihiro"}}
+        self.assertTrue(svc._uses_movie_art("tv", movie_model))                           # TMDB movie artwork/logo in TV
+        self.assertFalse(svc._uses_movie_art("tv", {"mode": "anidb", "tvdbid": "76885", "mapping": {"tmdbtv": "30991"}}))
+        self.assertEqual(svc._movie_episode_title(movie_model, {"season": 1, "index": 1}), "Sen to Chihiro")
+        series = dict(movie_model, anime={"type": "TV Series", "episodes": [{"season": 1, "index": 1}, {"season": 1, "index": 2}]})
+        self.assertEqual(svc._movie_episode_title(series, {"season": 1, "index": 1}), "")
 
     def test_match_paths(self):
         self.assertEqual(self.match("tv", {"type": 2, "title": "Cowboy Bebop"})[0]["ratingKey"], "anidb-23")

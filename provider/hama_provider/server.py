@@ -131,6 +131,9 @@ class Handler(BaseHTTPRequestHandler):
             kind, rating_key, sub = m
             if not rating_key:
                 return self._send(200, self.service.provider(kind))
+            if self.service.base_cfg.experimental_markers and any("marker" in k.lower() for k in self._query):
+                self.service.events.add("markers request", "Plex asked for %s with %s"
+                                        % (urlsplit(self.path).path, ", ".join(sorted(self._query))))
             lang = self._lang()
             order = self._query.get("episodeOrder", [""])[0]
             log.info("GET %s %s%s%s", kind, rating_key, "/" + sub if sub else "", " order=" + order if order else "")
