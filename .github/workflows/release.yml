@@ -1,0 +1,99 @@
+# Release: publish a GitHub release with a tag like v1.2.0 (matching provider/hama_provider/__init__.py).
+# Then this workflow:
+#   1. runs the tests (Python 3.8 and 3.12)
+#   2. builds the Docker image for amd64/arm64/arm-v7 and pushes it to ghcr.io/<owner>/<repo>:<version> and :latest
+#   3. attaches the Docker bundle (compose.yml + .env.example) and the provider zip to the release
+# Afterwards users only need:  docker pull ghcr.io/<owner>/<repo>:latest   (or the Docker bundle from the release page)
+# First release: make the package public once (GitHub > your profile > Packages > the package > Package settings > Change visibility).
+name: Release
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      push_image:
+        description: "Build and push the image (ghcr.io) for the current version"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write      # attach release assets
+  packages: write      # push to ghcr.io
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.8", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Unit tests (Python ${{ matrix.python }})
+        run: >
+          docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/provider:/src:ro" -w /src -e PYTHONDONTWRITEBYTECODE=1
+          python:${{ matrix.python }}-slim python -m unittest discover -s tests
+
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      image: ${{ steps.v.outputs.image }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        name: Check the tag matches the code version
+        run: |
+          VERSION=$(sed -n 's/^__version__ = "\(.*\)"/\1/p' provider/hama_provider/__init__.py)
+          if [ "${{ github.event_name }}" = "release" ] && [ "${{ github.event.release.tag_name }}" != "v$VERSION" ]; then
+            echo "::error::Release tag ${{ github.event.release.tag_name }} doesn't match provider version v$VERSION"; exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "image=ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+
+  image:
+    needs: [test, version]
+    if: github.event_name == 'release' || inputs.push_image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ needs.version.outputs.image }}
+          tags: |
+            type=raw,value=${{ needs.version.outputs.version }}
+            type=semver,pattern={{major}}.{{minor}},value=v${{ needs.version.outputs.version }}
+            type=raw,value=latest
+          labels: |
+            org.opencontainers.image.title=HAMA provider
+            org.opencontainers.image.licenses=GPL-3.0-only
+      - uses: docker/build-push-action@v6
+        with:
+          context: provider
+          file: provider/install/docker/Dockerfile
+          platforms: linux/amd64,linux/arm64,linux/arm/v7
+          build-args: VERSION=${{ needs.version.outputs.version }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+  assets:
+    needs: [test, version]
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build release assets
+        run: python3 provider/install/release/make_assets.py --image "${{ needs.version.outputs.image }}" --version "${{ needs.version.outputs.version }}" --out dist
+      - name: Attach to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ github.event.release.tag_name }}" dist/* --clobber

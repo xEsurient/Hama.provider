@@ -1,0 +1,9 @@
+# Build the image from this repository instead of pulling it. Use together with compose.yml, from this folder:
+#   docker compose -f compose.yml -f compose.build.yml up -d --build
+# (or build once with ./build.sh and set HAMA_IMAGE=hama-provider:local in .env)
+services:
+  hama-provider:
+    image: hama-provider:local
+    build:
+      context: ../..                      # the provider/ folder
+      dockerfile: install/docker/Dockerfile

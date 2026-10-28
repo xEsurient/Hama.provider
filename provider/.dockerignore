@@ -1,4 +1,6 @@
 data/
+install/release/
+tests/
 config.json
 install/docker/data/
 install/docker/media/

@@ -117,13 +117,25 @@ same machine. If Plex is elsewhere, set `"host": "0.0.0.0"`. The Docker image al
 
 ### Docker
 
+**From a release (recommended).** Download `hama-provider-docker-<version>.zip` from the repository's *Releases* page. It contains
+`compose.yml`, `.env.example` (with `HAMA_IMAGE` already set) and `INSTALL.md`. Unzip it anywhere; it doesn't need the rest of the repository.
 ```
-cd provider/install/docker
 cp .env.example .env               # git-ignored: your paths, PUID/PGID, Plex token, API keys, profiles
 mkdir -p data && sudo chown 1000:1000 data      # use your PUID:PGID
-docker compose up -d --build
+docker compose pull && docker compose up -d
 ```
-Needs Docker Compose 2.24 or newer, for the optional `.env` (`docker compose version`). On older versions, create `.env` first
+Or use `provider/install/docker/compose.yml` + `.env.example` directly, with `HAMA_IMAGE=ghcr.io/<owner>/<repo>:latest`
+(or `:1.2.0`) in `.env`. The image is also available with a plain `docker pull ghcr.io/<owner>/<repo>:latest`, for amd64, arm64 and arm/v7.
+
+**From source** (inside the repository):
+```
+cd provider/install/docker
+cp .env.example .env               # set HAMA_IMAGE=hama-provider:local
+docker compose -f compose.yml -f compose.build.yml up -d --build
+```
+`sh build.sh` builds the same image on its own (`--platform linux/amd64` for another CPU, `--save` writes a `docker load`-able tar to `dist/`).
+
+Needs Docker Compose 2.24 or newer for the optional `.env` (`docker compose version`). On older versions, create `.env` first
 (it can be empty).
 - `.env` holds everything personal. It is git-ignored (as are `data/` and `config.json`), so the repository stays free of secrets.
 - `PUID`/`PGID` should own your media files (for `prepare --apply`) and the data folder.
@@ -132,7 +144,7 @@ Needs Docker Compose 2.24 or newer, for the optional `.env` (`docker compose ver
 - Collection sync from a separate container needs `HAMA_PLEX_TOKEN`. To avoid the token, use *Option B* in `compose.yml`
   (`network_mode: "container:plex"`): the provider then shares Plex's network, Plex reaches it at `http://127.0.0.1:32550/tv`, and
   `HAMA_PLEX_URL=http://127.0.0.1:32400` works without a token.
-- Updating: `docker compose up -d --build`. Items Plex scans while the container is down stay unmatched until the provider is back;
+- Updating: `docker compose pull && docker compose up -d` (from source: add `-f compose.build.yml` and `--build`). Items Plex scans while the container is down stay unmatched until the provider is back;
   with `HAMA_PLEX_URL` set they are re-matched automatically within a few minutes, and are listed on `/report` either way.
 
 **Security.** Plex can't send credentials to custom providers yet, so the provider answers anyone who can reach port 32550. The status page
@@ -248,6 +260,21 @@ Put an `anime-list-custom.xml` in the data folder to override Anime-Lists entrie
   "unhandled request … markers". If it shows up, anime intro/credit skipping (via AniSkip) is possible. Please report it.
 - Theme songs are Plex's TV themes. AnimeThemes only offers Ogg audio, and Plex needs MP3.
 - TheTVDB's legacy API (used with HAMA's key) is no longer officially supported. If it goes away, episodes come from TheMovieDb automatically.
+
+## Releases (maintainers)
+
+1. Bump `__version__` in `hama_provider/__init__.py` and commit.
+2. On GitHub, publish a release whose tag is `v<version>` (for example `v1.2.0`).
+3. `.github/workflows/release.yml` then:
+   - runs the tests on Python 3.8 and 3.12;
+   - refuses a tag that doesn't match `__version__`;
+   - builds the image for linux/amd64, arm64 and arm/v7 and pushes it to `ghcr.io/<owner>/<repo>:<version>`, `:<major.minor>` and `:latest`;
+   - attaches `hama-provider-docker-<version>.zip`, `hama-provider-<version>.zip` and `SHA256SUMS` to the release.
+4. After the first release, make the package public once on GitHub (*your profile > Packages > the package > Package settings >
+   Change visibility*). Otherwise `docker pull` needs a login.
+
+The assets can be built locally with `python3 install/release/make_assets.py --image ghcr.io/<owner>/<repo>`, and the image with
+`install/docker/build.sh`. Running the workflow by hand (*Actions > Release > Run workflow*) can push an image without making a release.
 
 ## Development
 

@@ -1,6 +1,8 @@
-# HAMA provider in Docker.
-#   cp .env.example .env     # optional: your settings/secrets (.env is git-ignored, never commit it)
-#   docker compose up -d --build
+# HAMA provider: standalone compose file. Needs only this file and a .env next to it (copy them anywhere):
+#   cp .env.example .env      # set HAMA_IMAGE, MEDIA_DIR, PUID/PGID … (.env is git-ignored, never commit it)
+#   mkdir -p data && sudo chown <PUID>:<PGID> data
+#   docker compose pull && docker compose up -d
+# Building from source instead (inside the repo): docker compose -f compose.yml -f compose.build.yml up -d --build
 #
 # Plex provider URLs:
 #   Plex in Docker on the same network as this container -> http://hama-provider:32550/tv  (and /tvdb, /movies)
@@ -8,10 +10,7 @@
 #   Option B below (shared network with the Plex container) -> http://127.0.0.1:32550/tv
 services:
   hama-provider:
-    build:
-      context: ../..
-      dockerfile: install/docker/Dockerfile
-    image: hama-provider:latest
+    image: ${HAMA_IMAGE:-hama-provider:local}
     container_name: hama-provider
     restart: unless-stopped
     user: "${PUID:-1000}:${PGID:-1000}"     # same owner as your media, so 'prepare --apply' can rename files

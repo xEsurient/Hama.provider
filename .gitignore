@@ -1,1 +1,17 @@
+# Provider runtime data and secrets (cache, local config, Plex token)
+provider/data/
+provider/config.json
+provider/install/docker/data/
+provider/install/docker/media/
+.env
+*.env
+!.env.example
+dist/
+__pycache__/
+*.pyc
+
+# Local project docs, Claude memory & dev tooling (not committed by default)
+_claude/
+CLAUDE.local.md
+.claude/
 .DS_Store
