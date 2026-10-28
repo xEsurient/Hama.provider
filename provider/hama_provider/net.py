@@ -132,9 +132,10 @@ class Fetcher:
         return files, total
 
     def get(self, url: str, cache_name: str | None, ttl: float, throttle: tuple[str, float] | None = None,
-            headers: dict | None = None, validate=None, timeout: float = 30) -> bytes | None:
+            headers: dict | None = None, validate=None, timeout: float = 30, precheck=None) -> bytes | None:
         """Return the body of url, from cache when fresh. Falls back to a stale cache on errors.
-        validate(data) -> bool rejects bad bodies (e.g. AniDB error XML) so they are never cached."""
+        validate(data) -> bool rejects bad bodies (e.g. AniDB error XML) so they are never cached.
+        precheck() -> bool runs after the throttle wait; False skips the request (e.g. a ban hit while queued)."""
         with self._lock(cache_name or url):
             if cache_name:
                 data = self.read_cache(cache_name, ttl)
@@ -145,6 +146,8 @@ class Fetcher:
             try:
                 if throttle:
                     self._wait(*throttle)
+                if precheck and not precheck():
+                    return self.read_cache(cache_name) if cache_name else None
                 req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept-Encoding": "gzip",
                                                            **(headers or {})})
                 with urllib.request.urlopen(req, timeout=timeout) as resp:

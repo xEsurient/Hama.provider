@@ -1,5 +1,6 @@
 """Offline tests: python -m unittest discover -s tests (from the provider/ folder)."""
 import json
+import io
 import os
 import sys
 import tempfile
@@ -419,6 +420,27 @@ class AniDBBanTests(unittest.TestCase):
             self.assertAlmostEqual(b.banned_until - time.time(), 2 * BAN_BACKOFF, delta=5)
             self.assertTrue(b._validate(b'<anime id="1"><type>TV</type></anime>'))
             self.assertEqual(AniDB(None, "hama", "1", state).ban_strikes, 0)    # good answer resets the escalation
+
+    def test_queued_requests_skip_after_ban(self):
+        """Requests waiting on the throttle when a ban reply arrives must not be sent (each would extend the ban)."""
+        from unittest import mock
+        from hama_provider.anidb import AniDB
+        from hama_provider.net import Fetcher
+        with tempfile.TemporaryDirectory() as tmp:
+            f = Fetcher(os.path.join(tmp, "cache"))
+            a = AniDB(f, "hama", "1", os.path.join(tmp, "anidb_state.json"))
+            sent = []
+
+            def fake_urlopen(req, timeout=30):
+                sent.append(req.full_url)
+                return io.BytesIO(b'<error code="500">banned</error>')
+            with mock.patch("urllib.request.urlopen", fake_urlopen), mock.patch.object(f, "_wait", lambda *_: None):
+                self.assertIsNone(a.anime("1"))
+                self.assertGreater(a.banned_until, time.time())
+                a.banned_until = 0                                     # simulate a request that passed the check earlier
+                f._wait = lambda *_: setattr(a, "banned_until", time.time() + 60)  # ban arrives while it waits
+                self.assertIsNone(a.anime("2"))
+            self.assertEqual(len(sent), 1)
 
     def test_title_source_and_fallback(self):
         from hama_provider.anidb import TITLES_MIRROR_URL, TITLES_URL, TitleDB

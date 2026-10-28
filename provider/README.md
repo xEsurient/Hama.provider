@@ -261,7 +261,7 @@ Put an `anime-list-custom.xml` in the data folder to override Anime-Lists entrie
   The mirror can lag behind brand-new anime: when a title isn't found, the list is fetched once from AniDB itself (at most once a day,
   never during a ban; logged on `/report`). A folder tag `[anidb-12345]` always works, whatever the list contains.
 - **If you get banned** (status page: *AniDB API: banned*):
-  - The provider uses only its cache until the shown time. That's 3 h for the first ban, doubling on each further ban up to 24 h, and it
+  - The provider uses only its cache until the shown time. That's 12 h for the first ban, doubling on each further ban up to 48 h, and it
     is remembered across restarts.
   - Don't restart or re-create the container to "fix" it.
   - Check `/report` for the ban event and for *legacy HAMA* events: libraries still on the old agent query AniDB from the same IP.

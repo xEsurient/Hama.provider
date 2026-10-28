@@ -33,8 +33,8 @@ FILTER_SEARCH_WORDS = {
 # AniDB special episode prefixes -> HAMA season 0 numbering offset
 SPECIAL_OFFSETS = {"S": 0, "C": 100, "T": 200, "P": 300, "O": 400}
 RESTRICTED_GENRE = {"18 restricted": "X", "pornography": "X", "tv censoring": "TV-MA", "borderline porn": "TV-MA"}
-BAN_BACKOFF = 3 * 3600        # first ban: cache only for 3 h; doubles on each further ban (max 24 h), reset by a good answer
-BAN_BACKOFF_MAX = 24 * 3600
+BAN_BACKOFF = 12 * 3600       # first ban: cache only for 12 h; doubles on each further ban (max 48 h), reset by a good answer
+BAN_BACKOFF_MAX = 48 * 3600   # (3 h was too short: AniDB still refused us at 3 h and 9 h, and each refused request extends a ban)
 
 
 DIRECT_CACHE, MIRROR_CACHE = "AniDB/anime-titles.xml", "AniDB/anime-titles-mirror.xml"
@@ -209,7 +209,8 @@ class AniDB:
             return None
         else:
             data = self.fetcher.get(HTTP_API_URL.format(client=self.client, clientver=self.clientver, aid=aid),
-                                    cache_name, ttl=ttl, throttle=("anidb", 4.0), validate=self._validate)
+                                    cache_name, ttl=ttl, throttle=("anidb", 4.0), validate=self._validate,
+                                    precheck=lambda: time.time() >= self.banned_until)  # others queued behind a ban reply
         if not data:
             return None
         try:
