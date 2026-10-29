@@ -194,6 +194,7 @@ class PlexSync:
                 time.sleep(hours * 3600)
 
         threading.Thread(target=loop, name="hama-collection-sync", daemon=True).start()
+        log.info("Collection sync every %s h against %s", hours, self.base)
 
     def _rescue_loop(self):
         time.sleep(120)  # after the provider (and Plex) are up
@@ -204,4 +205,3 @@ class PlexSync:
             except Exception:
                 log.exception("Unmatched rescue failed")
             time.sleep(6 * 3600)
-        log.info("Collection sync every %s h against %s", hours, self.base)

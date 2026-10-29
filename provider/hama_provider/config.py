@@ -45,20 +45,23 @@ DEFAULTS = {
 
     # Extras
     "theme_songs": True,                    # Plex's TV theme library (tvthemes.plexapp.com, by TVDB id)
-    "tmdb_rating": True,
+    "tmdb_rating": True,                    # TMDB audience rating with Plex's TMDB badge (AniDB has no Plex badge)
     "collections": True,                    # franchise collections (TVDB series groups) and TMDB movie collections
 
     # Collection sync: PMS ignores collections sent by custom providers, so HAMA can add them through the Plex API.
     # Off until plex_url is set. Token: Plex Web > any item > Get Info > View XML, the X-Plex-Token in the URL.
     "plex_url": "",                         # e.g. http://127.0.0.1:32400
     "plex_token": "",
-    "collection_sync_hours": 12,
-    "collection_min_items": 2,
-    "rescue_unmatched": True,
-    "experimental_markers": False,          # advertise a 'markers' feature and log what PMS asks (research only)               # with plex_url: re-match items Plex left unmatched (e.g. provider was down)              # only create collections with at least this many items in the library            # 0 = only when run by hand (python3 run.py --sync-collections)                    # TMDB audience rating with Plex's TMDB badge (AniDB has no Plex badge)
+    "collection_sync_hours": 12,            # 0 = only when run by hand (python3 run.py --sync-collections)
+    "collection_min_items": 2,              # only create collections with at least this many items in the library
+    "rescue_unmatched": True,               # with plex_url: re-match items Plex left unmatched (e.g. provider was down)
+    "experimental_markers": False,          # advertise a 'markers' feature and log what PMS asks (research only)
 
     # Background AniDB pre-fetch for TVDB-seasons shows (seconds between AniDB requests; 0 = off)
-    "anidb_prefetch_seconds": 30,
+    "anidb_prefetch_seconds": 300,
+    # AniDB API requests per rolling 24 h, all sources together (0 = no limit). The pre-fetch stops at 80 % of it, so Plex
+    # requests keep the rest. AniDB bans IPs for sustained fetching (~250 requests in 2 h did it), not just for bursts.
+    "anidb_daily_limit": 150,
 
     # Extra providers with their own settings, e.g. {"tv-en": {"base": "tv", "title": "HAMA – Anime (English titles)",
     # "series_language_priority": ["en", "main"]}} -> add http://host:32550/tv-en in Plex (Plex passes no provider settings)

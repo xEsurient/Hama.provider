@@ -13,7 +13,7 @@ import threading
 import time
 from typing import Callable
 
-from .anidb import HTTP_API_URL
+from .anidb import HTTP_API_URL, PREFETCH_SHARE
 
 log = logging.getLogger("hama.prefetch")
 
@@ -88,11 +88,14 @@ class Prefetcher:
 
     def step(self) -> str | None:
         """Fetch one queued entry, then complete shows whose entries are all cached (or given up).
-        Paused while AniDB bans us or is unreachable; an entry only leaves the queue once cached or after
+        Paused while AniDB bans us or is unreachable, or when its share of the daily limit is used; an entry only leaves the queue once cached or after
         MAX_ATTEMPTS failures (then the show completes without a Plex refresh, so it can't loop)."""
         anidb = self.service.anidb
         if time.time() < anidb.banned_until or self.service.fetcher.host_down(HTTP_API_URL):
             return None
+        budget = getattr(anidb, "budget_left", None)
+        if budget and budget(PREFETCH_SHARE) <= 0:
+            return None  # its part of the daily limit is used up: the rest is kept for Plex requests
         with self._lock:
             aid = self._queue[0] if self._queue else None
         if aid is None:

@@ -115,7 +115,8 @@ class Service:
         self.profiles = load_profiles(cfg)
         self.fetcher = Fetcher(os.path.join(cfg.data_dir, "cache"))
         self.titledb = TitleDB(self.fetcher, cfg.anidb_titles_source)
-        self.anidb = AniDB(self.fetcher, cfg.anidb_client, cfg.anidb_clientver, os.path.join(cfg.data_dir, "anidb_state.json"))
+        self.anidb = AniDB(self.fetcher, cfg.anidb_client, cfg.anidb_clientver, os.path.join(cfg.data_dir, "anidb_state.json"),
+                           cfg.anidb_daily_limit)
         self.lists = AnimeLists(self.fetcher, cfg.data_dir)
         self.art = Artwork(self.fetcher, cfg.fanart_api_key)
         self.tmdb = TheMovieDb(self.fetcher, cfg.tmdb_api_key)
@@ -133,6 +134,9 @@ class Service:
             "legacy HAMA agent querying from the same IP, or restarting/re-creating the provider with a fresh data folder. "
             "Don't restart it during the ban: requests made while banned extend it."
             % (self.anidb.ban_strikes, time.strftime("%Y-%m-%d %H:%M", time.localtime(self.anidb.banned_until))))
+        self.anidb.on_limit = lambda: self.events.add(
+            "AniDB daily limit", "%d AniDB requests in 24 h (anidb_daily_limit): cache only until %s, then fetching resumes. "
+            "This is a safety stop, not a ban." % (self.anidb.daily_limit, time.strftime("%Y-%m-%d %H:%M", time.localtime(self.anidb.limit_resets()))))
         self._report_lock = threading.Lock()
         self._request = threading.local()
         self.prefetch = Prefetcher(self, cfg.anidb_prefetch_seconds)
@@ -223,6 +227,7 @@ class Service:
         files, size = self.fetcher.size()
         return {"version": __version__, "ready": self.titledb.ready.is_set(), "anime": len(self.titledb.titles),
                 "mappings": len(self.lists.by_aid), "anidb_banned_until": self.anidb.banned_until,
+                "anidb_requests": self.anidb.requests_today(), "anidb_limit": self.anidb.daily_limit,
                 "cache_files": files, "cache_bytes": size, "issues": self.issues.count(), "last_sync": self.last_sync, "last_rescue": self.last_rescue,
                 "tvdb_fallbacks": self.tvdb_fallbacks, "prefetch_queue": len(self.prefetch), "prefetch_done": self.prefetch.done,
                 "hosts_down": self.fetcher.hosts_down(),
@@ -699,7 +704,7 @@ class Service:
         if aid and movie and not any(self._external_ids(kind, model)[1:]):
             issues["no_mapping"] = {"text": "No TMDB/IMDb id in Anime-Lists: no logo, background or TMDB collection", "link": link}
         if aid and not model["anime"]:
-            issues["anidb_unavailable"] = {"text": "AniDB details not loaded (API error or ban); refresh the item later", "link": None}
+            issues["anidb_unavailable"] = {"text": "AniDB details not loaded yet (ban, daily limit or API error); the pre-fetch retries it", "link": None}
         if not fields.get("summary"):
             issues["no_summary"] = {"text": "No summary", "link": "https://anidb.net/anime/%s" % aid if aid else None}
         types = {i["type"] for i in model["images"]}

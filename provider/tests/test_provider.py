@@ -421,6 +421,22 @@ class AniDBBanTests(unittest.TestCase):
             self.assertTrue(b._validate(b'<anime id="1"><type>TV</type></anime>'))
             self.assertEqual(AniDB(None, "hama", "1", state).ban_strikes, 0)    # good answer resets the escalation
 
+    def test_daily_limit(self):
+        """Requests stop at the daily limit (counted across restarts); the pre-fetch stops earlier, at its share."""
+        from hama_provider.anidb import AniDB, PREFETCH_SHARE
+        with tempfile.TemporaryDirectory() as tmp:
+            state = os.path.join(tmp, "anidb_state.json")
+            a, limited = AniDB(None, "hama", "1", state, daily_limit=10), []
+            a.on_limit = lambda: limited.append(1)
+            self.assertEqual(sum(a._may_send() for _ in range(12)), 10)
+            self.assertEqual((a.requests_today(), len(limited)), (10, 1))
+            b = AniDB(None, "hama", "1", state, daily_limit=10)              # restart: still counted
+            self.assertFalse(b._may_send())
+            self.assertLessEqual(b.budget_left(PREFETCH_SHARE), 0)
+            b._sent = [time.time() - 86400 - 1] * 10                          # older than 24 h: free again
+            self.assertTrue(b._may_send())
+            self.assertTrue(all(AniDB(None, "hama", "1", "", daily_limit=0)._may_send() for _ in range(500)))
+
     def test_queued_requests_skip_after_ban(self):
         """Requests waiting on the throttle when a ban reply arrives must not be sent (each would extend the ban)."""
         from unittest import mock
@@ -582,7 +598,9 @@ class FakeAniList:
 
 
 class FakeAniDB:
-    banned_until = 0
+    banned_until, daily_limit = 0, 0
+    def requests_today(self):
+        return 0
     def anime(self, aid, fetch=True):
         return parse_anime(ET.fromstring(ANIME_XML)) if aid == "23" else None
 

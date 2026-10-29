@@ -35,6 +35,7 @@ SPECIAL_OFFSETS = {"S": 0, "C": 100, "T": 200, "P": 300, "O": 400}
 RESTRICTED_GENRE = {"18 restricted": "X", "pornography": "X", "tv censoring": "TV-MA", "borderline porn": "TV-MA"}
 BAN_BACKOFF = 12 * 3600       # first ban: cache only for 12 h; doubles on each further ban (max 48 h), reset by a good answer
 BAN_BACKOFF_MAX = 48 * 3600   # (3 h was too short: AniDB still refused us at 3 h and 9 h, and each refused request extends a ban)
+PREFETCH_SHARE = 0.8          # the background pre-fetch may use this part of the daily limit; the rest is kept for Plex requests
 
 
 DIRECT_CACHE, MIRROR_CACHE = "AniDB/anime-titles.xml", "AniDB/anime-titles-mirror.xml"
@@ -177,14 +178,18 @@ def similarity(query: str, title: str) -> float:
 
 
 class AniDB:
-    def __init__(self, fetcher: Fetcher, client: str, clientver: str, state_path: str = ""):
+    def __init__(self, fetcher: Fetcher, client: str, clientver: str, state_path: str = "", daily_limit: int = 0):
         self.fetcher = fetcher
         self.client, self.clientver = client, clientver
+        self.daily_limit = daily_limit  # AniDB API requests per rolling 24 h (0 = no limit): ~250 in 2 h got us banned
         self.banned_until = 0.0
         self.ban_strikes = 0
+        self._sent: list[float] = []    # times of API requests in the last 24 h (kept across restarts)
+        self._limit_logged = 0.0
         self.state_path = state_path  # ban state survives restarts: requests during a ban extend it
         self._load_state()
         self.on_ban = None  # callback(), e.g. the /report events
+        self.on_limit = None  # callback(), daily limit reached
         self._memo: dict[str, tuple[float, dict]] = {}
         self._memo_lock = threading.Lock()
 
@@ -207,10 +212,9 @@ class AniDB:
             data = cached
         elif not fetch:
             return None
-        else:
+        else:  # the check runs again after the throttle wait: a ban reply or the limit may arrive while queued
             data = self.fetcher.get(HTTP_API_URL.format(client=self.client, clientver=self.clientver, aid=aid),
-                                    cache_name, ttl=ttl, throttle=("anidb", 4.0), validate=self._validate,
-                                    precheck=lambda: time.time() >= self.banned_until)  # others queued behind a ban reply
+                                    cache_name, ttl=ttl, throttle=("anidb", 4.0), validate=self._validate, precheck=self._may_send)
         if not data:
             return None
         try:
@@ -223,6 +227,40 @@ class AniDB:
                 self._memo.clear()
             self._memo[aid] = (time.time(), parsed)
         return parsed
+
+    def requests_today(self) -> int:
+        cutoff = time.time() - DAY
+        with self._memo_lock:
+            self._sent = [t for t in self._sent if t > cutoff]
+            return len(self._sent)
+
+    def budget_left(self, share: float = 1.0) -> int:
+        """API requests still allowed in the rolling 24 h (share < 1: the pre-fetch's part); large number when unlimited."""
+        if self.daily_limit <= 0:
+            return 1 << 30
+        return int(self.daily_limit * share) - self.requests_today()
+
+    def limit_resets(self) -> float:
+        """When the oldest counted request leaves the 24 h window."""
+        with self._memo_lock:
+            return min(self._sent) + DAY if self._sent else 0.0
+
+    def _may_send(self) -> bool:
+        """Precheck for one API request: not banned and within the daily limit. Counts the request when it is allowed."""
+        if time.time() < self.banned_until:
+            return False
+        if self.budget_left() <= 0:
+            if time.time() - self._limit_logged > DAY / 2:
+                self._limit_logged = time.time()
+                log.warning("AniDB daily limit (%d requests) reached: cache only until %s", self.daily_limit,
+                            time.strftime("%Y-%m-%d %H:%M", time.localtime(self.limit_resets())))
+                if self.on_limit:
+                    self.on_limit()
+            return False
+        with self._memo_lock:
+            self._sent.append(time.time())
+        self._save_state()
+        return True
 
     def _validate(self, data: bytes) -> bool:
         head = data[:300].decode("utf-8", "replace")
@@ -250,6 +288,7 @@ class AniDB:
             with open(self.state_path, encoding="utf-8") as fh:
                 state = json.load(fh)
             self.banned_until, self.ban_strikes = float(state.get("banned_until", 0)), int(state.get("strikes", 0))
+            self._sent = [float(t) for t in state.get("sent", []) if time.time() - float(t) < DAY]
             if self.banned_until > time.time():
                 log.warning("AniDB ban from before the restart still active until %s: cache only",
                             time.strftime("%Y-%m-%d %H:%M", time.localtime(self.banned_until)))
@@ -260,9 +299,11 @@ class AniDB:
         if not self.state_path:
             return
         try:
-            tmp = self.state_path + ".tmp"
+            tmp = "%s.%d.tmp" % (self.state_path, threading.get_ident())  # request threads may save at the same time
             with open(tmp, "w", encoding="utf-8") as fh:
-                json.dump({"banned_until": self.banned_until, "strikes": self.ban_strikes}, fh)
+                with self._memo_lock:
+                    sent = list(self._sent)
+                json.dump({"banned_until": self.banned_until, "strikes": self.ban_strikes, "sent": sent}, fh)
             os.replace(tmp, self.state_path)
         except OSError as exc:
             log.warning("Could not save AniDB ban state: %s", exc)

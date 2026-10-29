@@ -138,7 +138,7 @@ cp .env.example .env               # git-ignored: your paths, PUID/PGID, Plex to
 mkdir -p data && sudo chown 1000:1000 data      # use your PUID:PGID
 docker compose pull && docker compose up -d
 ```
-`HAMA_IMAGE` in `.env` defaults to `ghcr.io/xesurient/hama.provider:latest`; pin a version such as `:1.2.7` if you prefer.
+`HAMA_IMAGE` in `.env` defaults to `ghcr.io/xesurient/hama.provider:latest`; pin a version such as `:1.2.8` if you prefer.
 A plain `docker pull ghcr.io/xesurient/hama.provider:latest` works too. Published GitHub releases also carry
 `hama-provider-docker-<version>.zip` with these files.
 
@@ -246,7 +246,8 @@ The settings live here, not in Plex: PMS 1.43 asks providers for preferences but
 | `collections` | `true` | Work out franchise and TMDB collections. They only reach Plex through the collection sync. |
 | `plex_url`, `plex_token` | empty | Turns on the collection sync and the Plex refresh after a pre-fetch. |
 | `collection_sync_hours`, `collection_min_items` | `12`, `2` | Sync interval (0 = only by hand) and minimum collection size. |
-| `anidb_prefetch_seconds` | `30` | Seconds between background AniDB fetches (0 = off). |
+| `anidb_prefetch_seconds` | `300` | Seconds between background AniDB fetches (0 = off). |
+| `anidb_daily_limit` | `150` | Most AniDB API requests in any 24 h (0 = no limit). The pre-fetch uses up to 80 % of it; the rest is kept for Plex requests. |
 | `cache_max_age_days` | `90` | Delete cached API answers that haven't been refreshed for this long. The AniDB XML is always kept. |
 | `match_min_score` | `50` | Lowest title-search score accepted for automatic matches. |
 | `host`, `port`, `data_dir`, `log_level`, `log_file` | `127.0.0.1`, `32550`, `./data`, `INFO`, none | Server settings. |
@@ -269,7 +270,10 @@ Put an `anime-list-custom.xml` in the data folder to override Anime-Lists entrie
   - Check `/report` for the ban event and for *legacy HAMA* events: libraries still on the old agent query AniDB from the same IP.
   - Also check other AniDB tools on your network, and that the data folder is writable, so the cache persists.
 - **Scan speed.** One Plex request fetches at most 3 uncached AniDB entries; the background pre-fetch does the rest at one entry per
-  `anidb_prefetch_seconds`. The first scan of a large library is therefore slow (about an hour per 1,000 AniDB entries). Let it finish.
+  `anidb_prefetch_seconds`, within `anidb_daily_limit` (150 requests per 24 h by default). AniDB also bans for sustained fetching:
+  about 250 requests in 2 hours did it. The first scan of a large library is therefore slow (about a week per 1,000 AniDB entries);
+  after that only new and still-airing shows need requests. Let it finish, and raise the limit only if you know your IP tolerates it.
+  The status page shows the requests made in the last 24 h.
 
 ## Current limits
 

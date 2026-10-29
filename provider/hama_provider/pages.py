@@ -58,6 +58,7 @@ def status_page(status: dict, base: str) -> str:
         ("AniDB titles / Anime-Lists mappings", "%d / %d" % (status["anime"], status["mappings"])),
         ("AniDB API", '<span class="bad">banned, cache only until %s</span>' % _when(status["anidb_banned_until"]) if banned
          else '<span class="ok">ok</span>'),
+        ("AniDB requests (24 h)", "%d of %s" % (status.get("anidb_requests", 0), status.get("anidb_limit") or "unlimited")),
         ("Unreachable sources", '<span class="bad">%s</span>' % escape(", ".join(status["hosts_down"])) if status["hosts_down"]
          else '<span class="ok">none</span>'),
         ("TVDB → TMDB fallbacks", str(status["tvdb_fallbacks"])),
