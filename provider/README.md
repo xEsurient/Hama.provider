@@ -13,7 +13,8 @@ Requirements: Python 3.8 or newer, with no other dependencies.
 - **HAMA's matching and titles.** It uses the AniDB title database, the folder tags `[anidb-12345]` / `[tvdb-12345]` / `[tmdb-…]` / `[imdb-tt…]`,
   and the Anime-Lists (ScudLee) AniDB↔TVDB/TMDB mapping. Title language priorities and specials numbering work as in HAMA
   (S=1+, OP/ED=101+/151+, trailers=201+, parodies=301+, others=401+).
-- **Title logos (clearLogo).** These are the stylised titles the new Plex apps show instead of plain text, from fanart.tv and TheMovieDb.
+- **Title logos (clearLogo).** These are the stylised titles the new Plex apps show instead of plain text, from fanart.tv, TheMovieDb
+  and TheTVDB (TheTVDB needs your own v4 key, see `tvdb_v4_api_key`).
 - **Artwork.**
   - Show and movie posters: AniList (high resolution), AniDB, TheTVDB, fanart.tv and TheMovieDb.
   - Backgrounds and season posters.
@@ -36,7 +37,11 @@ Requirements: Python 3.8 or newer, with no other dependencies.
   - the content rating for the library's *Certification Country*, for example `de/16`;
   - production Country tags.
 - **Resilience.**
-  - If TheTVDB's legacy API stops answering, episode lists come from TheMovieDb (through Anime-Lists' TMDB mapping).
+  - With your own TheTVDB v4 key, TheTVDB's current API is used first, and its legacy API becomes the fallback. Without a key (or when
+    TheTVDB has nothing), episode lists come from TheMovieDb (through Anime-Lists' TMDB mapping).
+  - Missing episode summaries are filled from TheMovieDb, then Kitsu. A show without a summary gets TheTVDB's, then TheMovieDb's, then Kitsu's.
+  - When Anime-Lists has no TVDB/TMDB/IMDb id for an AniDB entry, the ids come from [Fribb's anime-lists](https://github.com/Fribb/anime-lists)
+    and the links on the AniDB page. These are used for artwork, logos and summaries only; Anime-Lists ids always win.
   - An unreachable source costs a single timeout. After that it is skipped for 10 minutes and the cache is used.
 - **Background AniDB pre-fetch.** Long franchises are filled in slowly in the background. When the collection sync is set up,
   Plex is asked to refresh the show once everything is there.
@@ -48,6 +53,7 @@ Requirements: Python 3.8 or newer, with no other dependencies.
 - **Profiles:** extra provider addresses with their own settings, e.g. `/tv-en` with English titles, for per-library settings.
 - **Status page and missing-data report.** Open `http://127.0.0.1:32550/` in a browser to see the service status and settings.
   `/report` lists shows with missing mappings, summaries, posters or logos, with links to fix them on AniDB, Anime-Lists or fanart.tv.
+  With `plex_url` set, entries for shows and movies that are no longer in a HAMA library are removed (every 6 h).
   It also has **Recent events**: items Plex left unmatched, adult titles skipped, requests HAMA doesn't serve, sources down and AniDB bans.
 - **Self-healing:** with `plex_url` set, items that Plex left unmatched are re-matched automatically. That happens, for example, when the
   provider was down or updating during a scan (Plex never retries those by itself).
@@ -138,7 +144,7 @@ cp .env.example .env               # git-ignored: your paths, PUID/PGID, Plex to
 mkdir -p data && sudo chown 1000:1000 data      # use your PUID:PGID
 docker compose pull && docker compose up -d
 ```
-`HAMA_IMAGE` in `.env` defaults to `ghcr.io/xesurient/hama.provider:latest`; pin a version such as `:1.2.8` if you prefer.
+`HAMA_IMAGE` in `.env` defaults to `ghcr.io/xesurient/hama.provider:latest`; pin a version such as `:1.3.0` if you prefer.
 A plain `docker pull ghcr.io/xesurient/hama.provider:latest` works too. Published GitHub releases also carry
 `hama-provider-docker-<version>.zip` with these files.
 
@@ -234,12 +240,15 @@ The settings live here, not in Plex: PMS 1.43 asks providers for preferences but
 | `localize_summaries` | `true` | Non-English libraries: summaries from TheMovieDb in the library language. |
 | `logo_language_priority` | `en, ja, ""` | Preferred logo language. `""` means textless. The library language is always tried first. |
 | `poster_sources` | `AniList, AniDB, TheTVDB, FanartTV, TheMovieDb` | Poster source order. Remove a source to disable it. |
-| `background_sources` / `logo_sources` | `FanartTV, TheTVDB, TheMovieDb` / `FanartTV, TheMovieDb` | Same, for backgrounds and logos. |
+| `background_sources` / `logo_sources` | `FanartTV, TheTVDB, TheMovieDb` / `FanartTV, TheMovieDb, TheTVDB` | Same, for backgrounds and logos. TheTVDB logos need `tvdb_v4_api_key`. |
 | `season_poster_sources` | `AniList, AniDB, TheTVDB, FanartTV` | Season posters (TVDB seasons). AniList/AniDB = the cover of the AniDB entry that starts that season. |
 | `fanart_api_key`, `tmdb_api_key`, `tvdb_api_key` | HAMA's shared keys | Your own keys avoid shared rate limits. fanart.tv: a free *personal* key is enough. |
+| `tvdb_v4_api_key`, `tvdb_v4_pin` | empty | Your own TheTVDB API v4 key ([thetvdb.com/api-information](https://thetvdb.com/api-information)); the PIN only for keys tied to a subscriber account. When set, v4 is used first: logos, season posters, and episodes/summaries the legacy API no longer has. |
+| `kitsu_summaries` | `true` | Kitsu show/episode summaries when AniDB, TheTVDB and TheMovieDb have none. |
 | `anidb_client`, `anidb_clientver` | `hama`, `1` | AniDB HTTP client name/version; HAMA's by default (see *AniDB rules* below). |
 | `anidb_titles_source` | `mirror` | AniDB title list: `mirror` = the Anime-Lists GitHub copy, falling back to AniDB itself when the mirror is down or a search finds nothing (max once a day, never during a ban); `anidb` = AniDB only (max once a day). |
 | `rescue_unmatched` | `true` | With `plex_url`: re-match items Plex left unmatched (checked 2 min after start, then every 6 h). |
+| `prune_report` | `true` | With `plex_url`: remove report entries for items no longer in any HAMA library (same schedule). |
 | `experimental_markers` | `false` | Research only: advertise a "markers" feature and log what Plex asks (see *Current limits*). |
 | `genres_add_weights`, `genre_minimum_weight` | `false`, `400` | Same as HAMA's AniDB genre options. |
 | `theme_songs`, `tmdb_rating` | `true`, `true` | Plex theme songs and the TMDB rating. AniDB's own score can't be shown, because Plex only has badges for IMDb, TMDB and Rotten Tomatoes. |

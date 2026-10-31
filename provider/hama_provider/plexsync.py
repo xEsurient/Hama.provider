@@ -173,11 +173,33 @@ class PlexSync:
         self.service.last_rescue = {"time": int(time.time()), "asked": asked}
         return asked
 
+    def prune_report(self) -> int:
+        """Drop missing-data report entries for items no longer in any HAMA library. Does nothing unless every HAMA
+        library could be listed (an error raises before anything is removed)."""
+        known = schemes(self.service)
+        roots, libraries = set(), 0
+        for section in self._get("/library/sections").get("Directory", []):
+            found = known.get(section.get("agent", ""))
+            if not found:
+                continue
+            libraries += 1
+            plex_type = PLEX_TYPES["movie" if found[0] == "movies" else "show"]
+            for item in self._get("/library/sections/%s/all" % section["key"], {"type": plex_type}).get("Metadata", []):
+                scheme, _, rest = item.get("guid", "").partition("://")
+                if scheme in known:
+                    roots.add(rest.rsplit("/", 1)[-1])
+        if not libraries:
+            return 0
+        removed = self.service.issues.prune(roots)
+        if removed:
+            log.info("Report: removed %d entries for items no longer in a HAMA library", removed)
+        return removed
+
     def start_schedule(self):
         hours = self.cfg.collection_sync_hours
         if self.base:
             self.service.prefetch.on_show_complete = self.refresh_show
-            if self.cfg.rescue_unmatched:
+            if self.cfg.rescue_unmatched or self.cfg.prune_report:
                 threading.Thread(target=self._rescue_loop, name="hama-rescue", daemon=True).start()
         if not self.base or hours <= 0:
             return
@@ -201,7 +223,10 @@ class PlexSync:
         while True:
             try:
                 if self.service.wait_ready(300):
-                    self.rescue_unmatched()
+                    if self.cfg.rescue_unmatched:
+                        self.rescue_unmatched()
+                    if self.cfg.prune_report:
+                        self.prune_report()
             except Exception:
-                log.exception("Unmatched rescue failed")
+                log.exception("Unmatched rescue / report pruning failed")
             time.sleep(6 * 3600)

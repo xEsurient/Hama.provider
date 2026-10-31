@@ -18,8 +18,10 @@ from .anidb import AniDB, TitleDB, genres_and_rating, similarity
 from .anilist import AniList
 from .animelists import AnimeLists, episode_map
 from .config import DEFAULTS, Config, coerce
+from .ids import ExtraIds, from_anidb
 from .images import Artwork, Image, order
-from .net import Fetcher
+from .kitsu import Kitsu
+from .net import DAY, Fetcher
 from .prefetch import Prefetcher
 from .report import ANIME_LISTS_ISSUE, Events, Issues
 from .titles import cleanse_title, official_title, pick_title
@@ -41,6 +43,7 @@ RATING_KEY_RE = re.compile(r"^(anidb|tvdb|tmdb)-(\d+)(?:-(a|m|t3|t4))?(?:-s(\d+)
 FORCED_ID_RE = re.compile(r"[\[{](anidb|tvdb|tmdb|imdb)[2-9]?-(tt\d+|\d+)[\]}]", re.IGNORECASE)
 GUID_RE = re.compile(r"^(anidb|tvdb|tmdb|imdb)://(tt\d+|\d+)$", re.IGNORECASE)
 GENERIC_EP_TITLE = re.compile(r"^(Episode|Special|Complete Movie|OVA|Part)\s*\d*$", re.IGNORECASE)
+MOVIE_PART_RE = re.compile(r"^(?:Complete Movie|(Part \d+ of \d+))$", re.IGNORECASE)  # AniDB movie episodes: whole movie / split file
 ANIDB_FETCH_BUDGET = 3     # uncached AniDB API calls allowed per Plex request (4 s each); the rest fill in on later refreshes
 MODEL_TTL = 600
 # Episode orders offered to Plex as SeasonType (Edit > Advanced > Episode ordering). Code = rating-key marker.
@@ -67,7 +70,7 @@ PROFILE_KEYS = {"series_language_priority", "episode_language_priority", "use_re
                 "match_min_score", "genres_add_weights", "genre_minimum_weight"}
 
 
-SECRET_KEYS = ("fanart_api_key", "tmdb_api_key", "tvdb_api_key", "plex_token")
+SECRET_KEYS = ("fanart_api_key", "tmdb_api_key", "tvdb_api_key", "tvdb_v4_api_key", "tvdb_v4_pin", "plex_token")
 
 
 def masked_settings(cfg: Config) -> dict:
@@ -120,7 +123,9 @@ class Service:
         self.lists = AnimeLists(self.fetcher, cfg.data_dir)
         self.art = Artwork(self.fetcher, cfg.fanart_api_key)
         self.tmdb = TheMovieDb(self.fetcher, cfg.tmdb_api_key)
-        self.tvdb = TheTVDB(self.fetcher, cfg.tvdb_api_key)
+        self.tvdb = TheTVDB(self.fetcher, cfg.tvdb_api_key, cfg.tvdb_v4_api_key, cfg.tvdb_v4_pin)
+        self.ids = ExtraIds(self.fetcher)
+        self.kitsu = Kitsu(self.fetcher)
         self.arcs = StoryArcs(self.fetcher)
         self.anilist = AniList(self.fetcher)
         self.issues = Issues(cfg.data_dir)
@@ -204,7 +209,7 @@ class Service:
                 del self._models[key]
 
     def _load(self):
-        for loader in (self.lists.load, self.titledb.load):
+        for loader in (self.lists.load, self.titledb.load, self.ids.load):
             try:
                 loader()
             except Exception:  # keep serving; requests will report not-ready
@@ -214,7 +219,7 @@ class Service:
             if removed:
                 log.info("Cache: pruned %d files older than %d days", removed, self.cfg.cache_max_age_days)
             time.sleep(86400)
-            for loader in (self.lists.load, self.titledb.load):
+            for loader in (self.lists.load, self.titledb.load, self.ids.load):
                 try:
                     loader()
                 except Exception:
@@ -229,7 +234,7 @@ class Service:
                 "mappings": len(self.lists.by_aid), "anidb_banned_until": self.anidb.banned_until,
                 "anidb_requests": self.anidb.requests_today(), "anidb_limit": self.anidb.daily_limit,
                 "cache_files": files, "cache_bytes": size, "issues": self.issues.count(), "last_sync": self.last_sync, "last_rescue": self.last_rescue,
-                "tvdb_fallbacks": self.tvdb_fallbacks, "prefetch_queue": len(self.prefetch), "prefetch_done": self.prefetch.done,
+                "tvdb_fallbacks": self.tvdb_fallbacks, "tvdb_v4": bool(self.tvdb.v4_key), "extra_ids": len(self.ids.by_aid), "prefetch_queue": len(self.prefetch), "prefetch_done": self.prefetch.done,
                 "hosts_down": self.fetcher.hosts_down(),
                 "providers": {k: "/" + k for k in list(KINDS) + list(self.profiles)},
                 "settings": masked_settings(self.base_cfg),
@@ -514,14 +519,53 @@ class Service:
             return None
         if anime is None:  # ban/API error: fetch it in the background, then Plex refreshes the item (with plex_url)
             self.prefetch.add(kind, "anidb-%s" % aid, [aid])
-        mapping = self.lists.get(aid)
+        mapping = self._mapping(aid, anime)
         tvdbid = mapping.get("tvdbid", "") if mapping.get("tvdbid", "").isdigit() else ""
         model = {"root": "anidb-%s" % aid, "mode": "anidb", "lang": lang, "aid": aid, "anime": anime, "mapping": mapping,
                  "tvdbid": tvdbid, "fields": self._anidb_fields(kind, aid, anime, titles, mapping, lang),
                  "seasons": sorted({e["season"] for e in (anime or {}).get("episodes", [])}), "episodes": {},
                  "order": "", "season_root": "anidb-%s" % aid}
+        if anime and not model["fields"].get("summary"):  # AniDB has no description: TheTVDB, then TheMovieDb
+            model["fields"]["summary"] = self._fallback_summary(kind, model)
         model["fields"]["Guid"] = self._guids(kind, mapping)
         return model
+
+    def _mapping(self, aid: str, anime: dict | None) -> dict:
+        """Anime-Lists entry, with the ids it leaves empty filled from Fribb's anime-lists and the AniDB page's links.
+        Movies only get movie ids (TMDB movie, IMDb), series only TVDB and TMDB TV ids: an IMDb id alone marks an entry
+        as a movie (_uses_movie_art). mapping['extra'] = sources used, mapping['mal'/'kitsu'] for Kitsu."""
+        base = self.lists.get(aid)
+        mapping = dict(base)
+        fribb, links = self.ids.get(aid), from_anidb(anime)
+        movie = base.get("tvdbid") == "movie" or (anime or {}).get("type") == "Movie" or (not anime and fribb.get("movie"))
+        used = []
+
+        def fill(key, value, source):
+            if value and not mapping.get(key, "").split(",")[0].strip():
+                mapping[key] = value
+                if source not in used:
+                    used.append(source)
+        if not movie:
+            if not base.get("tvdbid", "").isdigit():
+                fill("tvdbid", fribb.get("tvdb"), "Fribb")
+            fill("tmdbtv", links.get("tmdb") if links.get("tmdb_kind") == "tv" else "", "AniDB")
+            fill("tmdbtv", fribb.get("tmdb_tv"), "Fribb")
+            # an OVA/special TheMovieDb only knows as a movie: movie artwork (no TV series to take it from)
+            movie = not mapping.get("tvdbid", "").isdigit() and not mapping.get("tmdbtv", "") and bool(
+                (links.get("tmdb") if links.get("tmdb_kind") == "movie" else "") or fribb.get("tmdb_movie"))
+        if movie:
+            fill("tmdbid", links.get("tmdb") if links.get("tmdb_kind") == "movie" else "", "AniDB")
+            fill("tmdbid", fribb.get("tmdb_movie"), "Fribb")
+            fill("imdbid", links.get("imdb"), "AniDB")
+            fill("imdbid", fribb.get("imdb"), "Fribb")
+        mapping["mal"] = links.get("mal") or fribb.get("mal", "")
+        mapping["kitsu"] = fribb.get("kitsu", "")
+        if used:
+            mapping["extra"] = used
+        return mapping
+
+    def _kitsu_id(self, mapping: dict) -> str:
+        return mapping.get("kitsu") or self.kitsu.id_for_mal(mapping.get("mal", ""))
 
     def _episode_source(self, tvdbid: str, tmdb_tv: str, lang: str, prefer: str = "tvdb"):
         """(episodes, AniDB entries, episode map, source). TheTVDB unless TMDB order is asked for; falls back to TMDB
@@ -538,9 +582,21 @@ class Service:
         if prefer == "tvdb":
             self.tvdb_fallbacks += 1
             log.warning("TVDB %s: no episodes from TheTVDB, using TheMovieDb %s", tvdbid, tmdb_tv)
-            self.events.add("TVDB fallback", "TVDB %s: TheTVDB returned no episodes, used TheMovieDb %s" % (tvdbid, tmdb_tv))
+            self.events.add("TVDB fallback", "TVDB %s: TheTVDB returned no episodes, used TheMovieDb %s" % (tvdbid, tmdb_tv),
+                            merge_within=DAY)
         entries = self.lists.entries_for_tmdbtv(tmdb_tv)
         return eps, entries, episode_map(entries, eps, "tmdb"), "tmdb"
+
+    def _fallback_summary(self, kind: str, model: dict) -> str:
+        if model["tvdbid"] and not self._uses_movie_art(kind, model):
+            overview = self.tvdb.series(model["tvdbid"], model["lang"] or "en").get("overview")
+            if overview:
+                return overview
+        _tvdb, tmdb, _imdb = self._external_ids(kind, model)
+        overview = (self.tmdb.details(self._uses_movie_art(kind, model), tmdb, model["lang"]).get("overview") or "") if tmdb else ""
+        if not overview and self.cfg.kitsu_summaries:
+            overview = self.kitsu.synopsis(self._kitsu_id(model.get("mapping") or {}))
+        return overview
 
     def _tmdb_movie_model(self, kind: str, tmdb_id: str, lang: str) -> dict | None:
         """Movies AniDB doesn't know: TheMovieDb only (fallback search or [tmdb-x]/[imdb-x] folder tags)."""
@@ -687,7 +743,7 @@ class Service:
             links["AniDB"] = "https://anidb.net/anime/%s" % model["aid"]
         if model.get("tvdbid"):
             links["TVDB"] = "https://thetvdb.com/?tab=series&id=%s" % model["tvdbid"]
-        self.issues.set(model["root"], model["fields"]["title"], links, model.setdefault("issues", {}))
+        self.issues.set(model["root"], model["fields"]["title"], links, model.setdefault("issues", {}), model.get("kind", "tv"))
 
     def _report_show(self, kind: str, model: dict):
         with self._report_lock:  # models are shared by request threads
@@ -695,14 +751,19 @@ class Service:
 
     def _report_show_locked(self, kind: str, model: dict):
         issues, fields, aid = model.setdefault("issues", {}), model["fields"], model.get("aid")
+        model["kind"] = kind  # stored with the report entry, for the Plex refresh of stale entries (Prefetcher.requeue_reported)
         for code in ("no_mapping", "anidb_unavailable", "no_summary", "no_poster", "no_logo"):
             issues.pop(code, None)
         link = ANIME_LISTS_ISSUE.format(aid=aid, title=quote(fields["title"])) if aid else None
         movie = self._uses_movie_art(kind, model) or (model.get("mapping") or {}).get("tvdbid") == "movie"
-        if aid and not movie and model["mode"] == "anidb" and not model["tvdbid"]:
-            issues["no_mapping"] = {"text": "No TVDB id in Anime-Lists: no episode thumbnails, TVDB seasons or franchise collection", "link": link}
+        extra = (model.get("mapping") or {}).get("extra")
+        if aid and not movie and model["mode"] == "anidb" and not self.lists.get(aid).get("tvdbid", "").isdigit():
+            issues["no_mapping"] = {"text": "No TVDB id in Anime-Lists: no episode thumbnails, TVDB seasons or franchise collection"
+                                    + (" (artwork and summaries use ids from %s)" % " and ".join(extra) if extra else ""), "link": link}
         if aid and movie and not any(self._external_ids(kind, model)[1:]):
             issues["no_mapping"] = {"text": "No TMDB/IMDb id in Anime-Lists: no logo, background or TMDB collection", "link": link}
+        elif aid and movie and extra and not any(self.lists.get(aid).get(k, "").split(",")[0].strip() for k in ("tmdbid", "imdbid")):
+            issues["no_mapping"] = {"text": "No TMDB/IMDb id in Anime-Lists (ids from %s used instead)" % " and ".join(extra), "link": link}
         if aid and not model["anime"]:
             issues["anidb_unavailable"] = {"text": "AniDB details not loaded yet (ban, daily limit or API error); the pre-fetch retries it", "link": None}
         if not fields.get("summary"):
@@ -796,17 +857,23 @@ class Service:
         if season not in model["episodes"]:
             build = self._anidb_episodes if model["mode"] == "anidb" else self._tvdb_episodes
             model["episodes"][season] = build(model, season)
-            self._localize_episodes(model, model["episodes"][season])
+            self._fill_episode_summaries(model, model["episodes"][season])
+            self._kitsu_episode_summaries(model, model["episodes"][season])
             self._report_episodes(model, season)
         return model["episodes"][season]
 
     def _movie_episode_title(self, model: dict, ep: dict) -> str:
-        """AniDB movies are one-episode entries titled 'Complete Movie': show the movie's own title instead."""
+        """AniDB movies are entries with a 'Complete Movie' episode, sometimes plus 'Part 1 of 2'-style episodes for split
+        releases: show the movie's own title instead (with the part). '' for anything else (e.g. a movie of shorts)."""
         anime = model.get("anime") or {}
-        regular = [e for e in anime.get("episodes", []) if e["season"] == 1]
-        if anime.get("type") == "Movie" and ep["season"] == 1 and len(regular) == 1:
+        if anime.get("type") != "Movie" or ep["season"] != 1:
+            return ""
+        if sum(1 for e in anime.get("episodes", []) if e["season"] == 1) == 1:
             return model["fields"]["title"]
-        return ""
+        m = next((MOVIE_PART_RE.match(t.strip()) for _t, lang, t in ep.get("titles", []) if lang == "en" and MOVIE_PART_RE.match(t.strip())), None)
+        if not m:
+            return ""
+        return "%s (%s)" % (model["fields"]["title"], m.group(1)) if m.group(1) else model["fields"]["title"]
 
     def _ep_title(self, titles, lang: str) -> str:
         title, _main = pick_title(titles, self._languages(self.cfg.episode_language_priority, lang))
@@ -826,11 +893,12 @@ class Service:
             if e["season"] != season:
                 continue
             tv = tvdb_eps.get(inverse.get((e["season"], e["index"])), {})
+            movie_title = self._movie_episode_title(model, e)
             out.append({"anidb": (model["aid"], e["season"], e["index"]), "src_key": None,
                         "season": season, "index": e["index"], "epno": e["epno"],
-                        "title": self._movie_episode_title(model, e) or self._ep_title(e["titles"], lang) or tv.get("episodeName")
+                        "title": movie_title or self._ep_title(e["titles"], lang) or tv.get("episodeName")
                                  or "Episode %s" % e["epno"],
-                        "summary": e["summary"] or tv.get("overview") or "", "airdate": e["airdate"] or tv.get("firstAired") or "",
+                        "summary": e["summary"] or tv.get("overview") or (model["fields"].get("summary", "") if movie_title else ""), "airdate": e["airdate"] or tv.get("firstAired") or "",
                         "duration": e["duration"], "thumb": thumb(tv) if tv else ""})
         return out
 
@@ -960,16 +1028,21 @@ class Service:
     def _localized(self, lang: str) -> bool:
         return bool(self.cfg.localize_summaries and lang and lang != "en")
 
-    def _localize_episodes(self, model: dict, episodes: list[dict]):
-        """Non-English libraries: TMDB episode summaries in the library language, matched through the AniDB entry
-        (or directly when the episodes already come from TMDB)."""
+    def _fill_episode_summaries(self, model: dict, episodes: list[dict]):
+        """TheMovieDb episode summaries. Non-English libraries: in the library language, replacing the others.
+        English: only for episodes AniDB/TheTVDB have no summary for (TheTVDB often lags on new or old episodes).
+        Matched through the AniDB entry (Anime-Lists TMDB mapping), directly when the episodes already come from TMDB,
+        else by a unique air date."""
         lang = model["lang"]
-        if not self._localized(lang) or not episodes:
+        localized = self._localized(lang)
+        if not episodes or self._uses_movie_art("tv", model):  # a movie's TMDB id isn't a TV series
+            return
+        if not localized and (model.get("ep_source") == "tmdb" or all(ep["summary"] for ep in episodes)):
             return
         _tvdb, tmdb_tv, _imdb = self._external_ids("tv", model)
         if not tmdb_tv:
             return
-        loc = self.tmdb.episodes(tmdb_tv, lang)
+        loc = self.tmdb.episodes(tmdb_tv, lang if localized else "")
         if not loc:
             return
         if model.get("ep_source") == "tmdb":
@@ -977,11 +1050,44 @@ class Service:
         else:
             entries = self.lists.entries_for_tmdbtv(tmdb_tv)
             by_anidb = {triple: key for key, triple in episode_map(entries, loc, "tmdb").items()}
+        dates = {}
+        for key, tv in loc.items():
+            if tv.get("firstAired"):
+                dates.setdefault(tv["firstAired"], []).append(key)
+        own_dates = {}
         for ep in episodes:
+            own_dates[ep["airdate"]] = own_dates.get(ep["airdate"], 0) + 1
+        for ep in episodes:
+            if not localized and ep["summary"]:
+                continue
             key = ep["src_key"] if model.get("ep_source") == "tmdb" else by_anidb.get(ep.get("anidb"))
+            if not key and model.get("ep_source") != "tmdb" and ep["airdate"] and own_dates[ep["airdate"]] == 1 \
+                    and len(dates.get(ep["airdate"], ())) == 1:
+                key = dates[ep["airdate"]][0]
             text = (loc.get(key) or {}).get("overview") if key else ""
             if text:
                 ep["summary"] = text
+
+    def _kitsu_episode_summaries(self, model: dict, episodes: list[dict]):
+        """Last fallback for regular episodes still without a summary: Kitsu, per AniDB entry (episode n of the entry =
+        Kitsu episode n). Uses only cached AniDB data and Fribb's list to find the entry on Kitsu."""
+        if not self.cfg.kitsu_summaries or self._uses_movie_art("tv", model):
+            return
+        wanted: dict[str, list[dict]] = {}
+        for ep in episodes:
+            triple = ep.get("anidb")
+            if not ep["summary"] and triple and triple[1] == 1:
+                wanted.setdefault(triple[0], []).append(ep)
+        for aid, eps in wanted.items():
+            if aid == model.get("aid") and model.get("mapping") and "kitsu" in model["mapping"]:
+                mapping = model["mapping"]
+            else:
+                mapping = self._mapping(aid, self.anidb.anime(aid, fetch=False))
+            kitsu_eps = self.kitsu.episodes(self._kitsu_id(mapping))
+            for ep in eps:
+                text = (kitsu_eps.get(ep["anidb"][2]) or {}).get("summary")
+                if text:
+                    ep["summary"] = text
 
     def _show_extras(self, kind: str, model: dict) -> dict:
         """Theme song (Plex TV themes, by TVDB id), TMDB audience rating, and for the library's language/country:

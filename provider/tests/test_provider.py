@@ -127,6 +127,124 @@ class HelperTests(unittest.TestCase):
             self.assertIsNotNone(f.read_cache("AniDB/xml/1.xml"))
 
 
+class EventsTests(unittest.TestCase):
+    def test_merge_within(self):
+        from hama_provider.report import Events
+        with tempfile.TemporaryDirectory() as tmp:
+            ev = Events(tmp)
+            ev.add("TVDB fallback", "A")
+            ev.add("TVDB fallback", "B")
+            ev.add("TVDB fallback", "A")                       # not the newest, no window: new row
+            self.assertEqual(len(ev.all()), 3)
+            ev.add("TVDB fallback", "B", merge_within=86400)   # folded into the recent B, moved to the top
+            items = ev.all()
+            self.assertEqual([(e["text"], e["count"]) for e in items], [("B", 2), ("A", 1), ("A", 1)])
+
+
+class TvdbV4Tests(unittest.TestCase):
+    def tvdb(self, v4=True, v3_eps=None):
+        from hama_provider.tvdb import TheTVDB
+        ext = {"name": "Kaubōi Bibappu", "originalLanguage": "jpn", "overview": "japanese text", "firstAired": "1998-04-03",
+               "originalNetwork": {"name": "TV Tokyo"}, "averageRuntime": 25, "genres": [{"name": "Anime"}],
+               "remoteIds": [{"id": "tt0213338", "sourceName": "IMDB"}], "contentRatings": [{"name": "TV-14", "country": "usa"}],
+               "artworks": [{"type": 23, "image": "https://artworks.thetvdb.com/banners/v4/series/1/clearlogo/a.png", "language": "eng", "score": 5},
+                            {"type": 2, "image": "/banners/v4/series/1/posters/p.jpg", "language": None, "score": 1},
+                            {"type": 99, "image": "https://x/ignored.jpg"}],
+               "seasons": [{"number": 1, "type": {"type": "official"}, "image": "https://artworks.thetvdb.com/s1.jpg"},
+                           {"number": 1, "type": {"type": "dvd"}, "image": "https://artworks.thetvdb.com/dvd1.jpg"}]}
+        pages = {0: {"data": {"episodes": [{"seasonNumber": 1, "number": 1, "name": "Asteroid Blues", "overview": "Spike.",
+                                            "aired": "1998-10-24", "absoluteNumber": 1, "image": "/banners/v4/episode/1.jpg"}]},
+                     "links": {"next": "page1"}},
+                 1: {"data": {"series": {"episodes": [{"seasonNumber": 1, "number": 2, "name": "Stray Dog Strut", "overview": "",
+                                            "aired": "1998-10-31", "absoluteNumber": 2, "image": None}]}}, "links": {"next": None}}}
+
+        class T(TheTVDB):
+            def _get4(self, path, cache, ttl=0):
+                if not self.v4_key:
+                    return None
+                if path.endswith("/extended"):
+                    return {"data": ext}
+                if path == "/artwork/types":
+                    return {"data": [{"id": 23, "slug": "clearlogo", "recordType": "series"}, {"id": 2, "slug": "posters", "recordType": "series"},
+                                     {"id": 25, "slug": "clearlogo", "recordType": "movie"}]}
+                if "/translations/eng" in path:
+                    return {"data": {"name": "Cowboy Bebop", "overview": "English overview"}}
+                if "/episodes/official/eng" in path:
+                    return pages[int(path.rsplit("=", 1)[1])]
+                return None
+
+            def _get(self, path, cache, lang="en", ttl=0):
+                if "/episodes" in path and v3_eps:
+                    return {"data": v3_eps, "links": {"next": None}}
+                if path.endswith("/series/1"):
+                    return {"data": {"seriesName": "v3 name", "overview": "v3 overview"}}
+                return None
+        return T(None, "v3key", "v4key" if v4 else "")
+
+    def test_v4_series_episodes_images(self):
+        t = self.tvdb()
+        s = t.series("1", "en")
+        self.assertEqual((s["seriesName"], s["overview"], s["network"], s["imdbId"], s["rating"], s["runtime"]),
+                         ("Cowboy Bebop", "English overview", "TV Tokyo", "tt0213338", "TV-14", "25"))
+        eps = t.episodes("1", "en")
+        self.assertEqual(sorted(eps), [(1, 1), (1, 2)])                                    # both pages
+        self.assertEqual(eps[(1, 1)]["thumb_url"], "https://artworks.thetvdb.com/banners/v4/episode/1.jpg")
+        imgs = t.images("1")
+        self.assertEqual([(i.url, i.lang) for i in imgs["clearLogo"]], [("https://artworks.thetvdb.com/banners/v4/series/1/clearlogo/a.png", "en")])
+        self.assertEqual(imgs["coverPoster"][0].url, "https://artworks.thetvdb.com/banners/v4/series/1/posters/p.jpg")
+        self.assertEqual([i.url for i in imgs["season"][1]], ["https://artworks.thetvdb.com/s1.jpg"])  # official order only
+
+    def test_without_v4_key_uses_v3(self):
+        t = self.tvdb(v4=False, v3_eps=[{"airedSeason": 1, "airedEpisodeNumber": 1, "episodeName": "v3 ep"}])
+        self.assertEqual(t.series("1")["seriesName"], "v3 name")
+        self.assertEqual(t.episodes("1")[(1, 1)]["episodeName"], "v3 ep")
+        self.assertEqual(t.images("1")["clearLogo"], [])
+
+
+class ExtraIdsTests(unittest.TestCase):
+    def test_fribb_and_anidb_links(self):
+        from hama_provider.ids import ExtraIds, from_anidb
+        data = json.dumps([{"anidb_id": 5, "tvdb_id": 700, "themoviedb_id": {"tv": 800}, "imdb_id": ["tt1"], "mal_id": 99, "kitsu_id": 4000, "type": "TV"},
+                           {"anidb_id": 6, "themoviedb_id": {"movie": [900]}, "imdb_id": ["tt2"], "type": "MOVIE"},
+                           {"anidb_id": None, "thetvdb_id": 1}, "junk"]).encode()
+
+        class F:
+            def get(self, *a, **k):
+                return data
+        ids = ExtraIds(F())
+        ids.load()
+        self.assertEqual(ids.get("5"), {"tvdb": "700", "tmdb_tv": "800", "imdb": "tt1", "mal": "99", "kitsu": "4000", "movie": False})
+        self.assertEqual(ids.get("6"), {"tmdb_movie": "900", "imdb": "tt2", "movie": True})
+        self.assertEqual(len(ids.by_aid), 2)
+        links = from_anidb({"type": "TV Series", "resources": {"2": ["99"], "43": ["tt9"], "44": ["tv", "321"]}})
+        self.assertEqual(links, {"mal": "99", "imdb": "tt9", "tmdb": "321", "tmdb_kind": "tv"})
+        self.assertEqual(from_anidb({"type": "Movie", "resources": {"44": ["555"]}})["tmdb_kind"], "movie")
+        self.assertEqual(from_anidb(None), {})
+
+
+class KitsuTests(unittest.TestCase):
+    def test_paging_and_mapping(self):
+        from hama_provider.kitsu import Kitsu
+        urls = []
+
+        class F:
+            def get_json(self, url, cache, ttl, headers=None, throttle=None):
+                urls.append(url)
+                if "/mappings" in url:
+                    return {"included": [{"type": "anime", "id": "4000"}]}
+                if "offset%5D=0" in url:
+                    return {"data": [{"attributes": {"number": 1, "description": " One. "}}], "links": {"next": "x"}}
+                return {"data": [{"attributes": {"number": 21, "synopsis": "Later."}}, {"attributes": {"number": None}}], "links": {}}
+        k = Kitsu(F())
+        self.assertEqual(k.id_for_mal("99"), "4000")
+        self.assertEqual(k.id_for_mal(""), "")
+        self.assertEqual({n: e["summary"] for n, e in k.episodes("4000").items()}, {1: "One.", 21: "Later."})
+        self.assertTrue(all(" " not in u and "[" not in u for u in urls))
+        F.get_json = lambda self, url, *a, **k: {"data": [{"attributes": {"number": 1}}], "links": {"next": "x"}}
+        urls.clear()
+        self.assertEqual(Kitsu(F()).episodes("5"), {1: {"title": "", "airdate": "", "summary": ""}})  # stops after page 1
+
+
 class HostDownTests(unittest.TestCase):
     def test_unreachable_host_is_skipped(self):
         from hama_provider.net import Fetcher
@@ -175,6 +293,31 @@ class PrefetchTests(unittest.TestCase):
             svc.anidb.banned_until = time.time() + 60
             pre.add("tvdb", "tvdb-6", ["4"])
             self.assertIsNone(pre.step())                        # paused during an AniDB ban
+
+    def test_requeue_reported(self):
+        from hama_provider.prefetch import Prefetcher
+        from hama_provider.report import Issues
+
+        class Anidb:
+            banned_until = 0
+
+            def anime(self, aid, fetch=True):
+                return {"aid": aid} if aid == "1" else None
+
+        with tempfile.TemporaryDirectory() as tmp:
+            svc = type("Svc", (), {})()
+            svc.cfg, svc.anidb, svc.issues, forgotten, refreshed = config.Config(data_dir=tmp), Anidb(), Issues(tmp), [], []
+            svc.forget = forgotten.append
+            stale = {"anidb_unavailable": {"text": "AniDB details not loaded", "link": None}}
+            svc.issues.set("anidb-1", "Cached now", {"AniDB": "https://anidb.net/anime/1"}, stale)
+            svc.issues.set("tvdb-9", "Still missing", {"AniDB": "https://anidb.net/anime/2"}, stale, "tv")
+            svc.issues.set("anidb-3", "Fine", {"AniDB": "https://anidb.net/anime/3"}, {"no_logo": {"text": "x", "link": None}}, "movies")
+            pre = Prefetcher(svc, 30)
+            pre.on_show_complete = lambda kind, root: refreshed.append((kind, root))
+            self.assertEqual(pre.requeue_reported(), 2)
+            self.assertEqual((forgotten, refreshed, len(pre)), (["anidb-1"], [("tv", "anidb-1")], 1))
+            self.assertEqual(pre.requeue_reported(), 1)             # tvdb-9 is waiting already; anidb-1 stays stale until Plex refreshes
+            self.assertEqual(dict(svc.issues.all())["anidb-3"]["kind"], "movies")
 
 
 class ReviewRegressionTests(unittest.TestCase):
@@ -534,6 +677,7 @@ class TvdbMapTests(unittest.TestCase):
 
 
 class FakeTVDB:
+    v4_key = ""
     EPS = {(1, 1): {"absoluteNumber": 1, "episodeName": "TVDB One", "overview": "tvdb summary", "firstAired": "1998-10-24", "filename": "episodes/76885/1.jpg"},
            (1, 2): {"absoluteNumber": 2, "episodeName": "TVDB Two", "overview": "", "firstAired": "1998-11-01", "filename": ""},
            (2, 1): {"absoluteNumber": 3, "episodeName": "Movie Ep", "overview": "", "firstAired": "2001-09-01", "filename": ""}}
@@ -597,6 +741,17 @@ class FakeAniList:
         return [Image("https://s4.anilist.co/cover/%s.jpg" % aid, "", 0, "AniList")] if aid == "23" else []
 
 
+class FakeKitsu:
+    def id_for_mal(self, mal):
+        return {"99": "4000"}.get(mal, "")
+
+    def synopsis(self, kitsu_id):
+        return "Kitsu synopsis" if kitsu_id == "4000" else ""
+
+    def episodes(self, kitsu_id):
+        return {1: {"title": "K1", "summary": "Kitsu ep 1", "airdate": ""}} if kitsu_id == "4000" else {}
+
+
 class FakeAniDB:
     banned_until, daily_limit = 0, 0
     def requests_today(self):
@@ -620,6 +775,7 @@ class ServiceTests(unittest.TestCase):
         svc.tmdb = FakeTMDB()
         svc.arcs = FakeArcs()
         svc.anilist = FakeAniList()
+        svc.kitsu = FakeKitsu()
         svc.titledb.titles = TITLES
         svc.titledb.index = [(cleanse_title(t), aid, t) for aid, ts in TITLES.items() for _, _, t in ts]
         svc.titledb.ready.set()
@@ -763,6 +919,80 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(eps[0]["title"], "Asteroid Blues")                            # titles follow the language settings
         en = self.get("/tv/library/metadata/anidb-23", {"X-Plex-Language": "en-US"})[1]["MediaContainer"]["Metadata"][0]
         self.assertEqual((en["summary"], en["contentRating"]), ("Spike hunts bounties.", "TV-14"))
+
+    def test_english_episode_summary_fallback(self):
+        svc, orig = self.svc, FakeTMDB.episodes
+        def eps(self, tv_id, lang=""):
+            out = orig(self, tv_id, lang)
+            for (s, e), ep in out.items():
+                ep["overview"] = ep["overview"] or "TMDB en %d" % e
+            return out
+        FakeTMDB.episodes = eps
+        svc._models.clear()
+        try:
+            got = self.get("/tvdb/library/metadata/tvdb-76885-s1/children")[1]["MediaContainer"]["Metadata"]
+            got_anidb = self.get("/tv/library/metadata/anidb-23-s1/children")[1]["MediaContainer"]["Metadata"]
+        finally:
+            FakeTMDB.episodes = orig
+            svc._models.clear()
+        self.assertEqual(got[0]["summary"], "tvdb summary")       # existing summaries are kept
+        self.assertEqual(got[1]["summary"], "TMDB en 2")           # missing one filled from TheMovieDb
+        self.assertTrue(all(e.get("summary") for e in got_anidb))
+        report = dict(svc.issues.all()).get("tvdb-76885", {}).get("issues", {})
+        self.assertNotIn("no_ep_summary_s1", report)
+
+    def test_extra_ids_and_kitsu(self):
+        svc = self.svc
+        svc.ids.by_aid = {"77": {"tvdb": "700", "mal": "99", "movie": False},
+                          "78": {"tmdb_movie": "603", "imdb": "tt0133093", "movie": True},
+                          "79": {"tmdb_movie": "604", "imdb": "tt0234215", "movie": False}}
+        try:
+            series = svc._mapping("77", {"type": "TV Series", "resources": {"44": ["tv", "321"]}})
+            self.assertEqual((series["tvdbid"], series["tmdbtv"], series["mal"], series["extra"]), ("700", "321", "99", ["Fribb", "AniDB"]))
+            self.assertNotIn("imdbid", series)                                    # an IMDb id would turn a series into a movie
+            movie = svc._mapping("78", {"type": "Movie", "resources": {}})
+            self.assertEqual((movie["tmdbid"], movie["imdbid"]), ("603", "tt0133093"))
+            ova = svc._mapping("79", {"type": "OVA", "resources": {}})               # TheMovieDb only has it as a movie
+            self.assertEqual((ova["tmdbid"], ova["imdbid"]), ("604", "tt0234215"))
+            self.assertNotIn("extra", svc._mapping("23", None))                   # Anime-Lists ids are never replaced
+            self.assertEqual(svc._mapping("23", None)["tvdbid"], "76885")
+            model = {"aid": "77", "mode": "anidb", "tvdbid": "", "lang": "", "mapping": series,
+                     "anime": {"type": "TV Series"}, "fields": {}}
+            eps = [{"anidb": ("77", 1, 1), "summary": "", "airdate": ""}, {"anidb": ("77", 1, 2), "summary": "", "airdate": ""}]
+            svc._kitsu_episode_summaries(model, eps)
+            self.assertEqual([e["summary"] for e in eps], ["Kitsu ep 1", ""])
+            no_tmdb = dict(model, mapping=dict(series, tmdbtv=""), tvdbid="")
+            self.assertEqual(svc._fallback_summary("tv", no_tmdb), "Kitsu synopsis")
+        finally:
+            svc.ids.by_aid = {}
+
+    def test_prune_report(self):
+        svc = self.svc
+        svc.issues.set("anidb-1", "Gone", {}, {"no_logo": {"text": "x", "link": None}})
+        svc.issues.set("anidb-23", "Kept", {}, {"no_logo": {"text": "x", "link": None}})
+        svc.issues.set("anidb-2", "New", {}, {"no_logo": {"text": "x", "link": None}})
+        for root in ("anidb-1", "anidb-23"):
+            svc.issues._data[root]["updated"] -= 7 * 3600
+
+        def fake(method, path, params=None):
+            if path == "/library/sections":
+                return {"MediaContainer": {"Directory": [{"key": "7", "title": "TV", "agent": "tv.plex.agents.custom.hama.tv"}]}}
+            if path == "/library/sections/7/all":
+                return {"MediaContainer": {"Metadata": [{"ratingKey": "1", "guid": "tv.plex.agents.custom.hama.tv://show/anidb-23"}]}}
+            return {}
+        sync = PlexSync(svc)
+        sync._request = fake
+        try:
+            self.assertEqual(sync.prune_report(), 1)
+            roots = [r for r, _e in svc.issues.all()]
+            self.assertNotIn("anidb-1", roots)
+            self.assertIn("anidb-23", roots)
+            self.assertIn("anidb-2", roots)                                        # written recently: kept
+            sync._request = lambda m, p, params=None: {"MediaContainer": {"Directory": []}}
+            self.assertEqual(sync.prune_report(), 0)                               # no HAMA library: nothing removed
+        finally:
+            for root in ("anidb-1", "anidb-23", "anidb-2"):
+                svc.issues.set(root, "", {}, {})
 
     def test_anidb_mode_tvdb_thumbs(self):
         ep = self.get("/tv/library/metadata/anidb-23-s1-e1")[1]["MediaContainer"]["Metadata"][0]
@@ -981,6 +1211,18 @@ class ServiceTests(unittest.TestCase):
         with svc._report_lock:
             svc._report_show_locked("tv", report)
         self.assertNotIn("no_mapping", report["issues"])                                  # a movie needs no TVDB id
+
+    def test_movie_parts_and_summary_fallback(self):
+        svc = self.svc
+        eps = [{"season": 1, "index": i, "epno": str(i), "summary": "", "airdate": "", "duration": None, "titles": [(None, "en", t)]} for i, t in enumerate(("Complete Movie", "Part 1 of 2", "Part 2 of 2"), 1)]
+        model = {"anime": {"type": "Movie", "episodes": eps}, "fields": {"title": "Jin-Roh", "summary": "Movie summary"}}
+        self.assertEqual([svc._movie_episode_title(model, e) for e in eps], ["Jin-Roh", "Jin-Roh (Part 1 of 2)", "Jin-Roh (Part 2 of 2)"])
+        shorts = dict(model, anime={"type": "Movie", "episodes": [dict(e, titles=[(None, "en", "Have I Got a Story for You")]) for e in eps]})
+        self.assertEqual(svc._movie_episode_title(shorts, shorts["anime"]["episodes"][0]), "")              # a movie of shorts keeps its episode titles
+        model.update(mode="anidb", aid="5", tvdbid="", lang="", mapping={})
+        self.assertEqual([e["summary"] for e in svc._anidb_episodes(model, 1)], ["Movie summary"] * 3)
+        self.assertEqual(svc._fallback_summary("tv", {"mode": "anidb", "tvdbid": "76885", "lang": "", "mapping": {}}), "Series overview")
+        self.assertEqual(svc._fallback_summary("tv", {"mode": "anidb", "tvdbid": "", "lang": "", "mapping": {"tmdbid": "603"}}), "Neo wakes up.")
 
     def test_match_paths(self):
         self.assertEqual(self.match("tv", {"type": 2, "title": "Cowboy Bebop"})[0]["ratingKey"], "anidb-23")

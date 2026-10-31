@@ -61,6 +61,8 @@ def status_page(status: dict, base: str) -> str:
         ("AniDB requests (24 h)", "%d of %s" % (status.get("anidb_requests", 0), status.get("anidb_limit") or "unlimited")),
         ("Unreachable sources", '<span class="bad">%s</span>' % escape(", ".join(status["hosts_down"])) if status["hosts_down"]
          else '<span class="ok">none</span>'),
+        ("TheTVDB API", "v4, legacy v3 as fallback" if status.get("tvdb_v4") else "legacy v3 only (set tvdb_v4_api_key for v4: logos, newer episodes)"),
+        ("Extra ids (Fribb's anime-lists)", "%d AniDB entries" % status.get("extra_ids", 0)),
         ("TVDB → TMDB fallbacks", str(status["tvdb_fallbacks"])),
         ("Cache", "%d files, %.1f MB" % (status["cache_files"], status["cache_bytes"] / 1048576)),
         ("AniDB client", "%s (HAMA's client name; set anidb_client / anidb_clientver to use your own)" % escape(status["settings"]["anidb_client"])

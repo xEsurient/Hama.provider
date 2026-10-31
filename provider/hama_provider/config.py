@@ -25,6 +25,10 @@ DEFAULTS = {
     "fanart_api_key": "cfa9dc054d221b8d107f8411cd20b13f",
     "tmdb_api_key": "7f4a0bd0bd3315bb832e17feda70b5cd",
     "tvdb_api_key": "A27AD9BE0DA63333",
+    # TheTVDB API v4 (your own key from thetvdb.com/api-information; no shared default). Used first when set: logos, season
+    # posters, and episodes/summaries the legacy v3 API no longer has. PIN only for keys tied to a subscriber account.
+    "tvdb_v4_api_key": "",
+    "tvdb_v4_pin": "",
 
     # Titles (same meaning as HAMA's SerieLanguagePriority / EpisodeLanguagePriority)
     "series_language_priority": ["main", "en", "ja"],
@@ -38,10 +42,12 @@ DEFAULTS = {
     "poster_sources": ["AniList", "AniDB", "TheTVDB", "FanartTV", "TheMovieDb"],
     "background_sources": ["FanartTV", "TheTVDB", "TheMovieDb"],
     "season_poster_sources": ["AniList", "AniDB", "TheTVDB", "FanartTV"],  # TVDB-seasons provider
-    "logo_sources": ["FanartTV", "TheMovieDb"],
+    "logo_sources": ["FanartTV", "TheMovieDb", "TheTVDB"],  # TheTVDB logos need tvdb_v4_api_key
     "logo_language_priority": ["en", "ja", ""],  # "" = textless/unknown language
     "max_images_per_type": 10,
     "cache_max_age_days": 90,               # prune cached API answers not refreshed for this long (AniDB XML is kept)
+
+    "kitsu_summaries": True,                # Kitsu show/episode summaries when AniDB, TheTVDB and TheMovieDb have none
 
     # Extras
     "theme_songs": True,                    # Plex's TV theme library (tvthemes.plexapp.com, by TVDB id)
@@ -55,6 +61,7 @@ DEFAULTS = {
     "collection_sync_hours": 12,            # 0 = only when run by hand (python3 run.py --sync-collections)
     "collection_min_items": 2,              # only create collections with at least this many items in the library
     "rescue_unmatched": True,               # with plex_url: re-match items Plex left unmatched (e.g. provider was down)
+    "prune_report": True,                   # with plex_url: drop report entries for items no longer in a HAMA library
     "experimental_markers": False,          # advertise a 'markers' feature and log what PMS asks (research only)
 
     # Background AniDB pre-fetch for TVDB-seasons shows (seconds between AniDB requests; 0 = off)

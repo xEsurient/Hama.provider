@@ -1,2 +1,2 @@
 """HAMA as a Plex Custom Metadata Provider (AniDB-based TV and Movie providers)."""
-__version__ = "1.2.8"
+__version__ = "1.3.0"

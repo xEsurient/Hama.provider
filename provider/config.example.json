@@ -11,6 +11,8 @@
   "fanart_api_key": "cfa9dc054d221b8d107f8411cd20b13f",
   "tmdb_api_key": "7f4a0bd0bd3315bb832e17feda70b5cd",
   "tvdb_api_key": "A27AD9BE0DA63333",
+  "tvdb_v4_api_key": "",
+  "tvdb_v4_pin": "",
   "series_language_priority": [
     "main",
     "en",
@@ -44,7 +46,8 @@
   ],
   "logo_sources": [
     "FanartTV",
-    "TheMovieDb"
+    "TheMovieDb",
+    "TheTVDB"
   ],
   "logo_language_priority": [
     "en",
@@ -53,6 +56,7 @@
   ],
   "max_images_per_type": 10,
   "cache_max_age_days": 90,
+  "kitsu_summaries": true,
   "theme_songs": true,
   "tmdb_rating": true,
   "collections": true,
@@ -61,8 +65,10 @@
   "collection_sync_hours": 12,
   "collection_min_items": 2,
   "rescue_unmatched": true,
+  "prune_report": true,
   "experimental_markers": false,
-  "anidb_prefetch_seconds": 30,
+  "anidb_prefetch_seconds": 300,
+  "anidb_daily_limit": 150,
   "profiles": {
     "tv-en": {
       "base": "tv",

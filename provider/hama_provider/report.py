@@ -26,22 +26,34 @@ class Issues:
         except (OSError, ValueError):
             pass
 
-    def set(self, root: str, title: str, links: dict, issues: dict[str, dict]):
+    def set(self, root: str, title: str, links: dict, issues: dict[str, dict], kind: str = "tv"):
         """issues: {code: {"text": str, "link": str|None}}; empty = show is clean (removed from the report).
         Stores a copy: callers keep mutating their own dict from other request threads."""
         issues, links = copy.deepcopy(issues), dict(links)
         with self._lock:
             if issues:
                 old = self._data.get(root)
-                if old and (old["title"], old["links"], old["issues"]) == (title, links, issues):
+                if old and (old["title"], old["links"], old["issues"], old.get("kind", "tv")) == (title, links, issues, kind):
                     return  # unchanged: don't rewrite the file
-                self._data[root] = {"title": title, "links": links, "updated": int(time.time()), "issues": issues}
+                self._data[root] = {"title": title, "links": links, "updated": int(time.time()), "issues": issues, "kind": kind}
                 if len(self._data) > MAX_SHOWS:
                     for old in sorted(self._data, key=lambda r: self._data[r]["updated"])[:len(self._data) - MAX_SHOWS]:
                         del self._data[old]
             elif self._data.pop(root, None) is None:
                 return
             self._save()
+
+    def prune(self, keep: set[str], grace: float = 6 * 3600) -> int:
+        """Remove entries whose root isn't in keep (items gone from Plex). Entries written within grace seconds stay:
+        a show being added may not be listed by Plex yet. Returns the number removed."""
+        now = time.time()
+        with self._lock:
+            gone = [r for r, e in self._data.items() if r not in keep and now - e.get("updated", 0) > grace]
+            for root in gone:
+                del self._data[root]
+            if gone:
+                self._save()
+        return len(gone)
 
     def _save(self):
         tmp = self.path + ".tmp"
@@ -78,13 +90,20 @@ class Events:
         except (OSError, ValueError):
             pass
 
-    def add(self, kind: str, text: str, link: str | None = None):
+    def add(self, kind: str, text: str, link: str | None = None, merge_within: float = 0):
+        """Repeats of the newest event are collapsed (count). merge_within (seconds): also fold a repeat into an older
+        identical event that recent, moved to the top (for things every refresh logs again, e.g. TVDB fallbacks)."""
         with self._lock:
-            if self._items and self._items[0]["kind"] == kind and self._items[0]["text"] == text:
-                self._items[0]["count"] = self._items[0].get("count", 1) + 1  # collapse repeats
-                self._items[0]["time"] = int(time.time())
+            now = int(time.time())
+            same = next((i for i, e in enumerate(self._items) if e["kind"] == kind and e["text"] == text
+                         and (i == 0 or (merge_within > 0 and now - e["time"] <= merge_within))), None)
+            if same is not None:
+                item = self._items.pop(same)
+                item["count"] = item.get("count", 1) + 1
+                item["time"] = now
+                self._items.insert(0, item)
             else:
-                self._items.insert(0, {"time": int(time.time()), "kind": kind, "text": text, "link": link, "count": 1})
+                self._items.insert(0, {"time": now, "kind": kind, "text": text, "link": link, "count": 1})
                 del self._items[MAX_EVENTS:]
             try:
                 tmp = self.path + ".tmp"

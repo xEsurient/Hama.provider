@@ -78,7 +78,41 @@ class Prefetcher:
         if self.interval > 0:
             threading.Thread(target=self._run, name="hama-prefetch", daemon=True).start()
 
+    def requeue_reported(self) -> int:
+        """Report entries still saying 'AniDB details not loaded' are only rebuilt when Plex asks for the show again, which may
+        never happen (e.g. built before the pre-fetch queued AniDB-mode shows, or a lost queue). Queue their AniDB entry again;
+        when it's cached already, only the report and Plex are stale: rebuild and ask Plex to refresh. Returns the number handled."""
+        handled = 0
+        for root, entry in self.service.issues.all():
+            if "anidb_unavailable" not in entry.get("issues", {}):
+                continue
+            aid = (entry.get("links") or {}).get("AniDB", "").rstrip("/").rsplit("/", 1)[-1]
+            if not aid.isdigit():
+                continue
+            kind = entry.get("kind", "tv")
+            with self._lock:
+                if root in self._waiting:
+                    continue
+            handled += 1
+            if self.service.anidb.anime(aid, fetch=False) is None:
+                self.add(kind, root, [aid])
+                continue
+            self.service.forget(root)
+            if self.on_show_complete:
+                try:
+                    self.on_show_complete(kind, root)
+                except Exception as exc:
+                    log.warning("Pre-fetch: Plex refresh of %s failed: %s", root, exc)
+        if handled:
+            log.info("Pre-fetch: %d report entries without AniDB details re-checked", handled)
+        return handled
+
     def _run(self):
+        time.sleep(min(self.interval, 120))  # after the Plex sync set on_show_complete
+        try:
+            self.requeue_reported()
+        except Exception:
+            log.exception("Pre-fetch: re-checking report entries failed")
         while True:
             time.sleep(self.interval)
             try:
