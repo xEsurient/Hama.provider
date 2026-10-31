@@ -218,7 +218,7 @@ class ExtraIdsTests(unittest.TestCase):
         self.assertEqual(len(ids.by_aid), 2)
         links = from_anidb({"type": "TV Series", "resources": {"2": ["99"], "43": ["tt9"], "44": ["tv", "321"]}})
         self.assertEqual(links, {"mal": "99", "imdb": "tt9", "tmdb": "321", "tmdb_kind": "tv"})
-        self.assertEqual(from_anidb({"type": "Movie", "resources": {"44": ["555"]}})["tmdb_kind"], "movie")
+        self.assertEqual(from_anidb({"type": "Movie", "resources": {"44": ["555"]}})["tmdb_kind"], "")       # unlabelled: unknown
         self.assertEqual(from_anidb(None), {})
 
 
@@ -243,6 +243,22 @@ class KitsuTests(unittest.TestCase):
         F.get_json = lambda self, url, *a, **k: {"data": [{"attributes": {"number": 1}}], "links": {"next": "x"}}
         urls.clear()
         self.assertEqual(Kitsu(F()).episodes("5"), {1: {"title": "", "airdate": "", "summary": ""}})  # stops after page 1
+
+
+class PlexStatusTests(unittest.TestCase):
+    def test_plex_rows(self):
+        import urllib.error
+        from hama_provider.pages import _plex_row
+        from hama_provider.plexsync import plex_error
+        ok = lambda r: "ok %d" % r["asked"]
+        self.assertIn("off", _plex_row({"settings": {"plex_url": ""}}, None, ok))
+        on = {"settings": {"plex_url": "http://127.0.0.1:32400"}}
+        self.assertIn("waiting", _plex_row(on, None, ok))
+        self.assertEqual(_plex_row(on, {"time": 0, "asked": 3}, ok), "ok 3")
+        err = plex_error(urllib.error.URLError(ConnectionRefusedError(111, "Connection refused")))
+        self.assertIn("host.docker.internal", err)
+        self.assertIn("failed", _plex_row(on, {"time": 0, "error": err}, ok))
+        self.assertIn("plex_token", plex_error(urllib.error.HTTPError("u", 401, "Unauthorized", {}, None)))
 
 
 class HostDownTests(unittest.TestCase):
@@ -954,6 +970,17 @@ class ServiceTests(unittest.TestCase):
             self.assertEqual((movie["tmdbid"], movie["imdbid"]), ("603", "tt0133093"))
             ova = svc._mapping("79", {"type": "OVA", "resources": {}})               # TheMovieDb only has it as a movie
             self.assertEqual((ova["tmdbid"], ova["imdbid"]), ("604", "tt0234215"))
+            ova = svc._mapping("79", {"type": "OVA", "resources": {"44": ["604"]}})  # unlabelled AniDB link = Fribb's movie id
+            self.assertEqual((ova.get("tmdbtv"), ova["tmdbid"]), (None, "604"))
+            guess = svc._mapping("80", {"type": "OVA", "resources": {"44": ["605"]}})  # unconfirmed: not used
+            self.assertNotIn("tmdbtv", guess)
+            self.assertNotIn("tmdbid", guess)
+            svc.lists.by_aid["81"] = {"tvdbid": "OVA", "tmdbid": "606", "tmdbtv": "", "imdbid": ""}
+            try:                                                                  # Anime-Lists movie mapping stays a movie
+                mapped = svc._mapping("81", {"type": "OVA", "resources": {"44": ["999"]}})
+                self.assertEqual((mapped.get("tmdbtv", ""), mapped["tmdbid"]), ("", "606"))
+            finally:
+                del svc.lists.by_aid["81"]
             self.assertNotIn("extra", svc._mapping("23", None))                   # Anime-Lists ids are never replaced
             self.assertEqual(svc._mapping("23", None)["tvdbid"], "76885")
             model = {"aid": "77", "mode": "anidb", "tvdbid": "", "lang": "", "mapping": series,

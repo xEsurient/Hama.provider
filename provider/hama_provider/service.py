@@ -537,7 +537,11 @@ class Service:
         base = self.lists.get(aid)
         mapping = dict(base)
         fribb, links = self.ids.get(aid), from_anidb(anime)
-        movie = base.get("tvdbid") == "movie" or (anime or {}).get("type") == "Movie" or (not anime and fribb.get("movie"))
+        if links.get("tmdb") and not links.get("tmdb_kind"):  # unlabelled TMDB link: only with Fribb's confirmation
+            links["tmdb_kind"] = "movie" if links["tmdb"] == fribb.get("tmdb_movie") else "tv" if links["tmdb"] == fribb.get("tmdb_tv") else ""
+        base_movie = not base.get("tvdbid", "").isdigit() and not base.get("tmdbtv", "").isdigit() and bool(
+            base.get("tmdbid", "").split(",")[0].strip() or base.get("imdbid", "").startswith("tt"))  # Anime-Lists maps it as a movie
+        movie = base.get("tvdbid") == "movie" or base_movie or (anime or {}).get("type") == "Movie" or (not anime and fribb.get("movie"))
         used = []
 
         def fill(key, value, source):

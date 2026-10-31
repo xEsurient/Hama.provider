@@ -24,6 +24,19 @@ def schemes(service: Service) -> dict[str, tuple[str, str]]:
     return out
 
 log = logging.getLogger("hama.plexsync")
+
+
+def plex_error(exc: Exception) -> str:
+    """Short reason for the status page, with the usual fix."""
+    if isinstance(exc, urllib.error.HTTPError):
+        if exc.code == 401:
+            return "Plex refused access (401): set plex_token"
+        return "Plex answered HTTP %d" % exc.code
+    reason = getattr(exc, "reason", exc)
+    text = "Plex unreachable (%s)" % reason
+    if "refused" in str(reason).lower() or "timed out" in str(reason).lower():
+        text += ". In Docker, 127.0.0.1/localhost is the provider's own container: use the Plex host's LAN IP or host.docker.internal"
+    return text
 PLEX_TYPES = {"movie": 1, "show": 2, "collection": 18}
 
 
@@ -57,6 +70,7 @@ class PlexSync:
         except urllib.error.HTTPError as exc:
             if exc.code == 401:
                 log.error("Collection sync: Plex refused access (401). Set plex_token; Plex only allows token-less access from its own machine.")
+                self.service.last_sync = {"time": int(time.time()), "error": plex_error(exc)}
                 return stats
             raise
         known = schemes(self.service)
@@ -211,6 +225,7 @@ class PlexSync:
                     self.run_once()
                 except (urllib.error.URLError, OSError, ValueError) as exc:
                     log.warning("Collection sync failed: %s", exc)
+                    self.service.last_sync = {"time": int(time.time()), "error": plex_error(exc)}
                 except Exception:  # keep the schedule alive whatever happens
                     log.exception("Collection sync crashed")
                 time.sleep(hours * 3600)
@@ -226,7 +241,11 @@ class PlexSync:
                     if self.cfg.rescue_unmatched:
                         self.rescue_unmatched()
                     if self.cfg.prune_report:
-                        self.prune_report()
-            except Exception:
-                log.exception("Unmatched rescue / report pruning failed")
+                        pruned = self.prune_report()
+                        self.service.last_rescue = dict(self.service.last_rescue, time=int(time.time()), pruned=pruned)
+            except Exception as exc:
+                log.warning("Unmatched rescue / report pruning failed: %s", exc)
+                error = plex_error(exc)
+                self.service.last_rescue = {"time": int(time.time()), "error": error}
+                self.service.events.add("Plex API", "%s (plex_url %s)" % (error, self.base), merge_within=86400)
             time.sleep(6 * 3600)

@@ -144,7 +144,7 @@ cp .env.example .env               # git-ignored: your paths, PUID/PGID, Plex to
 mkdir -p data && sudo chown 1000:1000 data      # use your PUID:PGID
 docker compose pull && docker compose up -d
 ```
-`HAMA_IMAGE` in `.env` defaults to `ghcr.io/xesurient/hama.provider:latest`; pin a version such as `:1.3.0` if you prefer.
+`HAMA_IMAGE` in `.env` defaults to `ghcr.io/xesurient/hama.provider:latest`; pin a version such as `:1.3.1` if you prefer.
 A plain `docker pull ghcr.io/xesurient/hama.provider:latest` works too. Published GitHub releases also carry
 `hama-provider-docker-<version>.zip` with these files.
 

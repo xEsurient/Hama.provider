@@ -49,6 +49,17 @@ def _when(ts) -> str:
     return time.strftime("%Y-%m-%d %H:%M", time.localtime(ts)) if ts else "never"
 
 
+def _plex_row(status: dict, last: dict | None, ok) -> str:
+    """Status of a Plex API job: off, waiting for its first run, failed (with the reason) or its last result."""
+    if not status["settings"].get("plex_url"):
+        return "off (set plex_url to enable)"
+    if not last:
+        return "waiting for the first run (about 2 min after start)"
+    if last.get("error"):
+        return '<span class="bad">failed %s: %s</span>' % (_when(last["time"]), escape(last["error"]))
+    return ok(last)
+
+
 def status_page(status: dict, base: str) -> str:
     banned = status["anidb_banned_until"] > time.time()
     sync = status["last_sync"]
@@ -67,11 +78,11 @@ def status_page(status: dict, base: str) -> str:
         ("Cache", "%d files, %.1f MB" % (status["cache_files"], status["cache_bytes"] / 1048576)),
         ("AniDB client", "%s (HAMA's client name; set anidb_client / anidb_clientver to use your own)" % escape(status["settings"]["anidb_client"])
          if status["settings"].get("anidb_client") == "hama" else "%s (own client)" % escape(str(status["settings"].get("anidb_client")))),
-        ("Unmatched rescue", ("last run %s: %d items re-matched" % (_when(status["last_rescue"]["time"]), status["last_rescue"]["asked"]))
-         if status.get("last_rescue") else "not run (needs plex_url)"),
+        ("Unmatched rescue / report cleanup", _plex_row(status, status.get("last_rescue"), lambda r: "last run %s: %s%s" % (
+            _when(r["time"]), "%d items re-matched" % r["asked"] if "asked" in r else "rescue off",
+            ", %d report entries removed" % r["pruned"] if "pruned" in r else ""))),
         ("AniDB pre-fetch", "%d queued, %d fetched since start" % (status["prefetch_queue"], status["prefetch_done"])),
-        ("Collection sync", ("last run %s: %d items, %d updated" % (_when(sync["time"]), sync["items"], sync["tagged"]))
-         if sync else "not run (set plex_url to enable)"),
+        ("Collection sync", _plex_row(status, sync, lambda r: "last run %s: %d items, %d updated" % (_when(r["time"]), r["items"], r["tagged"]))),
         ("Missing-data report", '<a href="/report">%d shows with issues</a>' % status["issues"]),
     ]
     providers = "".join("<li><code>%s%s</code></li>" % (escape(base), escape(p)) for p in status["providers"].values())

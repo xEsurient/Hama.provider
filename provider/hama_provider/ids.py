@@ -71,8 +71,8 @@ class ExtraIds:
 
 
 def from_anidb(anime: dict | None) -> dict:
-    """{'mal', 'imdb', 'tmdb', 'tmdb_kind'} from the AniDB page's links (empty values left out). TheMovieDb links carry
-    'movie'/'tv' next to the id; without it the AniDB type decides."""
+    """{'mal', 'imdb', 'tmdb', 'tmdb_kind'} from the AniDB page's links (empty values left out). tmdb_kind is 'movie'/'tv'
+    when the link says so, else '' (unknown: the caller must confirm it, e.g. with Fribb; AniDB OVAs are often TMDB movies)."""
     res = (anime or {}).get("resources") or {}
     out = {}
     mal = next((i for i in res.get(ANIDB_MAL, []) if i.isdigit()), "")
@@ -86,5 +86,5 @@ def from_anidb(anime: dict | None) -> dict:
         out["imdb"] = imdb
     if tmdb:
         out["tmdb"] = tmdb
-        out["tmdb_kind"] = kind or ("movie" if (anime or {}).get("type") == "Movie" else "tv")
+        out["tmdb_kind"] = kind
     return out
